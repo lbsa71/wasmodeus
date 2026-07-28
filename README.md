@@ -36,12 +36,22 @@ response to sustained junction pressure.
 ## Verify it
 
 ```sh
+npm test
+npm run test:scale
 npm run check
+npm run check:full
 npm run build
 ```
 
+`npm test` runs the deterministic small-map JavaScript suite and is the fast
+default for local TDD. `npm run test:scale` compiles the AssemblyScript core and
+runs the real 1,000 x 1,000, 100,000-car acceptance suite. The scale suite is
+intentionally explicit because recreating several million-cell worlds makes it
+much slower than the focused policy tests.
+
 `npm run check` runs ESLint, strict JavaScript type analysis, compiles the
-AssemblyScript core, and runs the unit/integration suite.
+AssemblyScript core, and runs the fast suite. `npm run check:full` adds the
+full-scale acceptance suite and production web build for CI or release gates.
 
 ## Design
 
@@ -131,5 +141,7 @@ remains the reference model for parity tests during that migration.
 assembly/        WebAssembly simulation
 src/             Camera, WASM adapter, WebGPU data/shaders/renderer, and UI
 public/          HTML and CSS
-test/            WASM integration and JavaScript unit tests
+test/            Fast deterministic JavaScript tests
+test-scale/      Real 1,000 x 1,000 WASM acceptance tests
+test-support/    Shared integration-test helpers
 ```

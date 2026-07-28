@@ -8,10 +8,14 @@
     "build": "npm run build:wasm && npm run build:web",
     "build:wasm": "asc assembly/index.ts --config asconfig.json --target release",
     "build:web": "esbuild src/main.js --bundle --format=esm --sourcemap --outfile=public/app.js",
-    "check": "npm run lint && npm run typecheck && npm test",
+    "check": "npm run lint && npm run typecheck && npm run build:wasm && npm run test:fast",
+    "check:full": "npm run check && npm run test:scale && npm run build:web",
     "dev": "npm run build && python -m http.server 4173 --directory public",
     "lint": "eslint .",
-    "test": "npm run build:wasm && node --test",
+    "test": "npm run test:fast",
+    "test:fast": "node --test \"test/*.test.js\"",
+    "test:full": "npm run test:fast && npm run test:scale",
+    "test:scale": "npm run build:wasm && node --test \"test-scale/*.test.js\"",
     "typecheck": "tsc --project jsconfig.json"
   },
   "devDependencies": {

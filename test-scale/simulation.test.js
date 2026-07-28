@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadSimulation } from "./wasm-helper.js";
+import { loadSimulation } from "../test-support/wasm-helper.js";
 
 const GRID_SIZE = 1_000;
 const CAR_COUNT = 100_000;
