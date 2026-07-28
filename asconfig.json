@@ -1,0 +1,19 @@
+{
+  "options": {
+    "exportRuntime": true,
+    "importMemory": false,
+    "initialMemory": 512,
+    "maximumMemory": 2048,
+    "noAssert": false,
+    "runtime": "stub"
+  },
+  "targets": {
+    "release": {
+      "outFile": "public/simulation.wasm",
+      "textFile": "build/simulation.wat",
+      "sourceMap": true,
+      "optimizeLevel": 3,
+      "shrinkLevel": 1
+    }
+  }
+}

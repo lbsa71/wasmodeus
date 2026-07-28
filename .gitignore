@@ -1,0 +1,6 @@
+build/
+node_modules/
+public/app.js
+public/app.js.map
+public/simulation.wasm
+public/simulation.wasm.map
