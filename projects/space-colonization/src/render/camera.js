@@ -1,4 +1,4 @@
-export const MIN_ZOOM_PARSECS = 0.0000001;
+export const MIN_ZOOM_PARSECS = 1e-12;
 export const MAX_ZOOM_PARSECS = 128_000;
 const WHEEL_ZOOM_SENSITIVITY = 0.004;
 

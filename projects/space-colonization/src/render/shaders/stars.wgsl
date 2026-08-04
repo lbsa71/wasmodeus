@@ -9,7 +9,8 @@ struct StarRecord {
 struct Camera {
   view_projection: mat4x4f,
   point_size: f32,
-  _padding: vec3f,
+  rebase_xy: vec2f,
+  _padding: f32,
 }
 
 struct VertexOut {
@@ -33,16 +34,29 @@ fn quad_vertex(vertex_index: u32) -> vec2f {
 @vertex
 fn vertex_main(@builtin(vertex_index) vertex_index: u32, @builtin(instance_index) instance_index: u32) -> VertexOut {
   let star = stars[instance_index];
-  let clip = camera.view_projection * vec4f(star.position_flux.xyz, 1.0);
+  let clip = (camera.view_projection * vec4f(star.position_flux.xyz, 1.0)) - vec4f(
+    camera.rebase_xy.x * camera.view_projection[0][0],
+    camera.rebase_xy.y * camera.view_projection[1][1],
+    0.0,
+    0.0,
+  );
   let corner = quad_vertex(vertex_index);
   let is_sector = (star.flags & 1u) != 0u;
+  let is_planet = (star.flags & 2u) != 0u;
   let sprite_size = max(0.00025, camera.point_size * star.radius * max(0.25, sqrt(max(0.0, star.position_flux.w))));
   let sector_size = vec2f(
     star.radius * camera.view_projection[0][0] * 0.5,
     star.radius * camera.view_projection[1][1] * 0.5,
   );
   var output: VertexOut;
-  output.position = clip + vec4f(select(corner * sprite_size * clip.w, corner * sector_size, is_sector), 0.0, 0.0);
+  let physical_size = vec2f(
+    star.radius * camera.view_projection[0][0],
+    star.radius * camera.view_projection[1][1],
+  );
+  var offset = corner * sprite_size * clip.w;
+  if (is_sector) { offset = corner * sector_size; }
+  if (is_planet) { offset = corner * physical_size; }
+  output.position = clip + vec4f(offset, 0.0, 0.0);
   output.color = vec3f(
     f32(star.color & 255u) / 255.0,
     f32((star.color >> 8u) & 255u) / 255.0,

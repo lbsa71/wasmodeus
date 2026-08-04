@@ -1,12 +1,12 @@
 import { starBodyRef } from "../core/body-ref.js";
 import { LEAF_EDGE_PARSECS, OctreeCatalog, OCTREE_DEPTH, ROOT_EDGE_PARSECS, sectorPathForCell } from "../core/octree.js";
-import { renderLayerFor } from "../core/render-layer.js";
+import { FOCUSED_SYSTEM_MAX_ZOOM_PARSECS, renderLayerFor } from "../core/render-layer.js";
 import { visibleSectorRange } from "../core/sector-viewport.js";
 import { generateSystem } from "../core/system-generator.js";
 import { rotateGalacticPosition } from "../core/galactic-orbit.js";
-import { planetIndexFromBodyPath, planetZoomParsecs, systemZoomParsecs } from "../core/system-view.js";
+import { EARTH_RADIUS_PARSECS, planetIndexFromBodyPath, planetZoomParsecs, systemZoomParsecs } from "../core/system-view.js";
 import { lockPositionForBody } from "../core/focus-lock.js";
-import { DEFAULT_STAR_SNAPSHOT_LIMIT, encodeStarSnapshot, packStarColor, SECTOR_GRID_FLAG } from "./snapshot.js";
+import { DEFAULT_STAR_SNAPSHOT_LIMIT, encodeStarSnapshot, packStarColor, PLANET_DISK_FLAG, SECTOR_GRID_FLAG } from "./snapshot.js";
 
 /** @type {OctreeCatalog|null} */ let catalog = null;
 /** @type {any} */ let wasm = null;
@@ -65,7 +65,7 @@ function publishOverview(view) {
     stars.push({ position: [rotated[0] - position[0], rotated[1] - position[1], rotated[2] - position[2]], apparentFlux: 0.25 + (1.5 * overviewRandom(index, 7)), color: packStarColor(temperatureKelvin), pickHandle: index + 1, radius: 1 });
   }
   const starBuffer = encodeStarSnapshot(stars);
-  workerPostMessage({ type: "snapshot", snapshot: { starBuffer, starCount: count, pickTable, time, focus, layer: "GALAXY OVERVIEW" } }, [starBuffer]);
+  workerPostMessage({ type: "snapshot", snapshot: { starBuffer, starCount: count, pickTable, time, focus, layer: "GALAXY OVERVIEW", renderOriginParsecs: position } }, [starBuffer]);
 }
 
 /** @param {{ positionParsecs?: number[], zoomParsecs?: number, aspect?: number, maxStars?: number }} view */
@@ -117,7 +117,7 @@ function publishSectorGrid(view) {
     }
   }
   const starBuffer = encodeStarSnapshot(stars);
-  workerPostMessage({ type: "snapshot", snapshot: { starBuffer, starCount: stars.length, pickTable, time, focus, layer: renderLayerFor(view.zoomParsecs ?? 100, false), sectorRange: range } }, [starBuffer]);
+  workerPostMessage({ type: "snapshot", snapshot: { starBuffer, starCount: stars.length, pickTable, time, focus, layer: renderLayerFor(view.zoomParsecs ?? 100, false), sectorRange: range, renderOriginParsecs: position } }, [starBuffer]);
 }
 
 function publishStarSystem() {
@@ -127,6 +127,7 @@ function publishStarSystem() {
   const position = focusedBodyPosition();
   const auInParsecs = 1 / 206264.806;
   const totalDays = elapsedDays();
+  /** @type {Array<{ position: number[], apparentFlux: number, color: number, pickHandle: number, flags?: number, radius: number }>} */
   const stars = [{ position: [focusPositionParsecs[0] - position[0], focusPositionParsecs[1] - position[1], focusPositionParsecs[2] - position[2]], apparentFlux: 12, color: packStarColor(5_800), pickHandle: 1, radius: 4 }];
   const primaryRef = { ...focus, bodyPath: 0 };
   /** @type {import("../core/body-ref.js").BodyRef[]} */ const pickTable = [primaryRef];
@@ -135,7 +136,7 @@ function publishStarSystem() {
     const [x, y] = planetPosition(planet, planetIndex);
     const planetRef = { ...primaryRef, bodyPath: planet.bodyPath };
     pickTable.push(planetRef);
-    stars.push({ position: [x - position[0], y - position[1], focusPositionParsecs[2] - position[2]], apparentFlux: 2.5, color: packStarColor(2_800 + (planet.albedo * 5_000)), pickHandle: pickTable.length, radius: 2 });
+    stars.push({ position: [x - position[0], y - position[1], focusPositionParsecs[2] - position[2]], apparentFlux: 2.5, color: packStarColor(2_800 + (planet.albedo * 5_000)), pickHandle: pickTable.length, flags: PLANET_DISK_FLAG, radius: planet.radiusEarth * EARTH_RADIUS_PARSECS });
     for (let moonIndex = 0; moonIndex < planet.moons.length; moonIndex += 1) {
       const moon = planet.moons[moonIndex];
       const moonAngle = (totalDays * Math.PI * 2 / Math.max(1, 18 * (moonIndex + 1))) + moonIndex;
@@ -144,7 +145,7 @@ function publishStarSystem() {
     }
   }
   const starBuffer = encodeStarSnapshot(stars);
-  workerPostMessage({ type: "snapshot", snapshot: { starBuffer, starCount: stars.length, pickTable, time, focus, layer: focusedLayer, lockPositionParsecs: position } }, [starBuffer]);
+  workerPostMessage({ type: "snapshot", snapshot: { starBuffer, starCount: stars.length, pickTable, time, focus, layer: focusedLayer, lockPositionParsecs: position, renderOriginParsecs: position } }, [starBuffer]);
 }
 
 /** @param {string} wasmUrl */
@@ -158,7 +159,7 @@ async function loadWasm(wasmUrl) {
 function publishSnapshot(view) {
   if (!catalog) return;
   const zoom = view.zoomParsecs ?? 16_000;
-  if (focus && zoom <= 0.001) {
+  if (focus && zoom <= FOCUSED_SYSTEM_MAX_ZOOM_PARSECS) {
     publishStarSystem();
     return;
   }

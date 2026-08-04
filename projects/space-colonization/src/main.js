@@ -1,6 +1,8 @@
 import { GalaxyEngine } from "./galaxy-engine.js";
 import { createGalaxyCamera, panCamera, resizeCamera, zoomCameraAt } from "./render/camera.js";
 import { formatTimeScale, sliderFromTimeScale, timeScaleFromSlider } from "./core/time-scale.js";
+import { bodyKind } from "./core/identity.js";
+import { formatBodyRef } from "./core/body-ref.js";
 
 const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector("#galaxy"));
 const status = /** @type {HTMLParagraphElement} */ (document.querySelector("#status"));
@@ -8,6 +10,9 @@ const debugX = /** @type {HTMLSpanElement} */ (document.querySelector("#debug-x"
 const debugY = /** @type {HTMLSpanElement} */ (document.querySelector("#debug-y"));
 const debugZoom = /** @type {HTMLSpanElement} */ (document.querySelector("#debug-zoom"));
 const debugLayer = /** @type {HTMLSpanElement} */ (document.querySelector("#debug-layer"));
+const debugGalaxy = /** @type {HTMLSpanElement} */ (document.querySelector("#debug-galaxy"));
+const debugFocus = /** @type {HTMLSpanElement} */ (document.querySelector("#debug-focus"));
+const debugBody = /** @type {HTMLSpanElement} */ (document.querySelector("#debug-body"));
 const debugFps = /** @type {HTMLSpanElement} */ (document.querySelector("#debug-fps"));
 const debugTime = /** @type {HTMLSpanElement} */ (document.querySelector("#debug-time"));
 const timeScaleInput = /** @type {HTMLInputElement} */ (document.querySelector("#time-scale"));
@@ -37,6 +42,9 @@ try {
     debugY.textContent = camera.positionParsecs[1].toFixed(0);
     debugZoom.textContent = camera.zoomParsecs.toFixed(0);
     debugLayer.textContent = engine.layer;
+    debugGalaxy.textContent = engine.galaxyId;
+    debugFocus.textContent = engine.focusedBody ? formatBodyRef(engine.focusedBody) : "—";
+    debugBody.textContent = engine.focusedBody ? bodyKind(engine.focusedBody.bodyPath) : "—";
     debugTime.textContent = formatTimeScale(timeScale);
     timeScaleValue.textContent = formatTimeScale(timeScale);
     debugFps.textContent = frameSamples ? (frameSamples / accumulatedFrameSeconds).toFixed(1) : "0";
@@ -66,7 +74,6 @@ try {
     if (!picked) return;
     camera = zoomCameraAt({ ...camera, positionParsecs: picked.positionParsecs, zoomParsecs: 0.0005 }, 0, 0, 0);
     engine.focus(picked.body, camera);
-    updateCamera();
   });
   const zoomAtPointer = (/** @type {WheelEvent} */ event) => {
     const bounds = canvas.getBoundingClientRect();

@@ -7,7 +7,7 @@ test("galaxy camera pans in world units and clamps zoom", () => {
   const camera = createGalaxyCamera(16 / 9);
   const moved = panCamera(camera, 100, -50);
   assert.deepEqual(moved.positionParsecs, [-100, 50, 0]);
-  assert.equal(zoomCamera(camera, 1e9).zoomParsecs, 0.0000001);
+  assert.equal(zoomCamera(camera, 1e9).zoomParsecs, 1e-12);
   assert.equal(zoomCamera(camera, -1e9).zoomParsecs, 128_000);
 });
 

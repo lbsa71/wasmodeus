@@ -7,5 +7,6 @@ test("zoom level reports an explicit render layer", () => {
   assert.equal(renderLayerFor(16_000, false), "GALAXY OVERVIEW");
   assert.equal(renderLayerFor(100, false), "SECTOR GRID");
   assert.equal(renderLayerFor(0.01, false), "STELLAR NEIGHBORHOOD");
-  assert.equal(renderLayerFor(0.0001, true), "STAR SYSTEM");
+  assert.equal(renderLayerFor(50, true), "STAR SYSTEM");
+  assert.equal(renderLayerFor(63, true), "SECTOR GRID");
 });

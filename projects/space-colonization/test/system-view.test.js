@@ -14,7 +14,12 @@ test("system framing encloses the outermost planet and its moon envelope", () =>
 });
 
 test("planet focus identifies its parent planet and frames its moons", () => {
-  const planet = { moons: [{ semiMajorAxisAu: 0.3, eccentricity: 0.1 }] };
+  const planet = { radiusEarth: 1, moons: [{ semiMajorAxisAu: 0.3, eccentricity: 0.1 }] };
   assert.equal(planetIndexFromBodyPath(0x03010000), 2);
   assert.equal(planetZoomParsecs(planet), 0.495 * AU_IN_PARSECS);
+});
+
+test("a moonless planet starts as a near full-frame physical disk", () => {
+  const planet = { radiusEarth: 1, moons: [] };
+  assert.ok(planetZoomParsecs(planet) < 1e-8);
 });

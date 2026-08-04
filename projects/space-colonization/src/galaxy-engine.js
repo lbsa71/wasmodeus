@@ -1,5 +1,6 @@
 import { WebGpuGalaxyRenderer } from "./render/webgpu-renderer.js";
 import { addSimulationSeconds } from "./core/simulation-time.js";
+import { galaxyId } from "./core/identity.js";
 
 export class GalaxyEngine {
   /** @param {HTMLCanvasElement} canvas @param {{ seed?: bigint, maxStars?: number }} config */
@@ -22,6 +23,8 @@ export class GalaxyEngine {
     this.lastViewPublishMillis = -Infinity;
     /** @type {ReturnType<typeof setTimeout>|null} */ this.viewPublishTimer = null;
     this.activeSystem = null;
+    /** @type {import("./core/body-ref.js").BodyRef|null} */ this.focusedBody = null;
+    this.galaxyId = "";
     /** @type {((view: { positionParsecs: number[], zoomParsecs: number, aspect?: number }) => void)|null} */ this.onSystemView = null;
     this.layer = "GALAXY OVERVIEW";
     /** @type {{ resolve: (value: unknown) => void, reject: (reason?: unknown) => void }|null} */ this.ready = null;
@@ -43,6 +46,7 @@ export class GalaxyEngine {
   #initialize(seed) {
     return new Promise((resolve, reject) => {
       this.ready = { resolve, reject };
+      this.galaxyId = galaxyId(seed);
       this.worker.onerror = (event) => reject(event.error ?? new Error(event.message));
       this.worker.postMessage({ type: "init", seed, wasmUrl: new URL("./galaxy-core.wasm", import.meta.url).href });
     });
@@ -80,9 +84,17 @@ export class GalaxyEngine {
   }
   /** @param {import("./core/body-ref.js").BodyRef} body @param {typeof this.camera} [camera] */
   focus(body, camera = this.camera) {
+    // Focus is a high-priority combined pan/zoom/lock request. Do not leave a
+    // debounced camera message between the user's double-click and the worker.
+    if (this.viewPublishTimer) {
+      clearTimeout(this.viewPublishTimer);
+      this.viewPublishTimer = null;
+    }
+    this.camera = camera;
+    this.focusedBody = body;
     this.worker.postMessage({ type: "focus", body, view: { positionParsecs: camera.positionParsecs, zoomParsecs: camera.zoomParsecs, aspect: camera.aspect, maxStars: this.maxStars } });
   }
-  render() { this.renderer.render({ viewProjection: this.camera.viewProjection, pointSize: this.camera.pointSize }); }
+  render() { this.renderer.render({ viewProjection: this.camera.viewProjection, pointSize: this.camera.pointSize, positionParsecs: this.camera.positionParsecs }); }
   /** @param {number} x @param {number} y */
   pick(x, y) { return this.renderer.pick(x, y, this.camera); }
   dispose() { if (this.viewPublishTimer) clearTimeout(this.viewPublishTimer); this.worker.terminate(); }

@@ -3,6 +3,8 @@ import { createStarRenderBuffer, writeStarRecord } from "../render/star-data.js"
 export const DEFAULT_STAR_SNAPSHOT_LIMIT = 16_384;
 /** Record flag consumed by the shader to draw a leaf-sector outline. */
 export const SECTOR_GRID_FLAG = 1;
+/** Record flag for a physical-radius planet disk. */
+export const PLANET_DISK_FLAG = 2;
 
 /** @param {number} temperatureKelvin */
 export function packStarColor(temperatureKelvin) {
