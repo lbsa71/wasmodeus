@@ -19,3 +19,13 @@ test("road overview pixels distinguish blocked terrain, land, and roads", () => 
   assert.ok(pixels[12] > pixels[8]);
   assert.equal(pixels[15], 255);
 });
+
+test("shared home and work plots remain visible in the overview", () => {
+  const pixels = createRoadOverviewPixels(
+    new Uint8Array([16 | 10 | 64, 16 | 5 | 128]),
+    2,
+  );
+
+  assert.ok(pixels[2] > pixels[0], "home plots should be blue");
+  assert.ok(pixels[4] > pixels[6], "work plots should be warm");
+});

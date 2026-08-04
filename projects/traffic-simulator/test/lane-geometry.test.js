@@ -31,3 +31,22 @@ test("right-hand traffic occupies opposite sides in opposite directions", () => 
 test("unknown or stationary directions remain on the road center", () => {
   assert.deepEqual(lanePosition(3.5, 4.5, 0, 0.11), { x: 3.5, y: 4.5 });
 });
+
+test("four-lane roads place the slow lane outside the passing lane", () => {
+  assert.deepEqual(
+    lanePosition(10.5, 20.5, EAST, { fourLane: true, lane: 0 }),
+    { x: 10.5, y: 20.79 },
+  );
+  assert.deepEqual(
+    lanePosition(10.5, 20.5, EAST, { fourLane: true, lane: 1 }),
+    { x: 10.5, y: 20.6 },
+  );
+  assert.deepEqual(
+    lanePosition(10.5, 20.5, WEST, { fourLane: true, lane: 0 }),
+    { x: 10.5, y: 20.21 },
+  );
+  assert.deepEqual(
+    lanePosition(10.5, 20.5, WEST, { fourLane: true, lane: 1 }),
+    { x: 10.5, y: 20.4 },
+  );
+});

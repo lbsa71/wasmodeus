@@ -8,9 +8,14 @@ export const WEST = 8;
  * @param {number} x
  * @param {number} y
  * @param {number} direction
- * @param {number} offset
+ * @param {number | { fourLane: boolean, lane: number }} lane
  */
-export function lanePosition(x, y, direction, offset) {
+export function lanePosition(x, y, direction, lane) {
+  const offset = typeof lane === "number"
+    ? lane
+    : lane.fourLane
+      ? lane.lane === 0 ? 0.29 : 0.1
+      : 0.11;
   if (direction === EAST) return { x, y: y + offset };
   if (direction === WEST) return { x, y: y - offset };
   if (direction === SOUTH) return { x: x - offset, y };

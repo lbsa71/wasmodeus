@@ -3,20 +3,24 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "A WebAssembly-powered massive traffic simulator.",
+  "workspaces": [
+    "projects/*"
+  ],
+  "description": "A multi-project simulation workspace.",
   "scripts": {
-    "build": "npm run build:wasm && npm run build:web",
-    "build:wasm": "asc assembly/index.ts --config asconfig.json --target release",
-    "build:web": "esbuild src/main.js --bundle --format=esm --sourcemap --outfile=public/app.js",
-    "check": "npm run lint && npm run typecheck && npm run build:wasm && npm run test:fast",
-    "check:full": "npm run check && npm run test:scale && npm run build:web",
-    "dev": "npm run build && python -m http.server 4173 --directory public",
-    "lint": "eslint .",
+    "build": "npm run build --workspaces --if-present",
+    "build:traffic": "npm run build --workspace @wasmodeus/traffic-simulator",
+    "build:space-colonization": "npm run build --workspace @wasmodeus/space-colonization",
+    "check": "npm run check --workspace @wasmodeus/traffic-simulator",
+    "check:full": "npm run check:full --workspace @wasmodeus/traffic-simulator",
+    "dev": "npm run dev --workspace @wasmodeus/traffic-simulator",
+    "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test:fast",
-    "test:fast": "node --test \"test/*.test.js\"",
-    "test:full": "npm run test:fast && npm run test:scale",
-    "test:scale": "npm run build:wasm && node --test \"test-scale/*.test.js\"",
-    "typecheck": "tsc --project jsconfig.json"
+    "test:fast": "npm run test:fast --workspace @wasmodeus/traffic-simulator",
+    "test:full": "npm run test:full --workspace @wasmodeus/traffic-simulator",
+    "test:scale": "npm run test:scale --workspace @wasmodeus/traffic-simulator",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "start": "npm run dev --workspace @wasmodeus/traffic-simulator"
   },
   "devDependencies": {
     "assemblyscript": "^0.28.0",

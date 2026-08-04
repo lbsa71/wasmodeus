@@ -3,7 +3,7 @@
     "exportRuntime": true,
     "importMemory": false,
     "initialMemory": 512,
-    "maximumMemory": 2048,
+    "maximumMemory": 4096,
     "noAssert": false,
     "runtime": "stub"
   },

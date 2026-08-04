@@ -82,6 +82,7 @@ export class WebGpuRenderer {
     this.width = 1;
     this.height = 1;
     this.pixelRatio = 1;
+    this.roadRevision = simulation.roadRevision;
 
     this.sceneBuffer = device.createBuffer({
       label: "WASMODEUS scene uniform",
@@ -100,6 +101,21 @@ export class WebGpuRenderer {
     });
     this.carDirectionBuffer = device.createBuffer({
       label: "WASMODEUS packed car directions",
+      size: tileStorageByteLength(simulation.carCount),
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
+    });
+    this.carLaneBuffer = device.createBuffer({
+      label: "WASMODEUS packed car lanes",
+      size: tileStorageByteLength(simulation.carCount),
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
+    });
+    this.carSegmentBuffer = device.createBuffer({
+      label: "WASMODEUS car road segments",
+      size: carStorageByteLength(simulation.carCount),
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
+    });
+    this.carActiveBuffer = device.createBuffer({
+      label: "WASMODEUS packed active cars",
       size: tileStorageByteLength(simulation.carCount),
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
     });
@@ -125,6 +141,10 @@ export class WebGpuRenderer {
         { binding: 1, resource: { buffer: this.carXBuffer } },
         { binding: 2, resource: { buffer: this.carYBuffer } },
         { binding: 3, resource: { buffer: this.carDirectionBuffer } },
+        { binding: 4, resource: { buffer: this.carLaneBuffer } },
+        { binding: 5, resource: { buffer: this.carSegmentBuffer } },
+        { binding: 6, resource: { buffer: this.roadTileBuffer } },
+        { binding: 7, resource: { buffer: this.carActiveBuffer } },
       ],
     });
   }
@@ -236,12 +256,31 @@ export class WebGpuRenderer {
     });
     this.device.queue.writeBuffer(this.sceneBuffer, 0, sceneUniform);
     const simulation = this.simulation;
+    if (simulation.roadRevision !== this.roadRevision) {
+      this.device.queue.writeBuffer(
+        this.roadTileBuffer,
+        0,
+        simulation.roadTiles,
+      );
+      this.roadRevision = simulation.roadRevision;
+    }
     this.device.queue.writeBuffer(this.carXBuffer, 0, simulation.x);
     this.device.queue.writeBuffer(this.carYBuffer, 0, simulation.y);
     this.device.queue.writeBuffer(
       this.carDirectionBuffer,
       0,
       simulation.directions,
+    );
+    this.device.queue.writeBuffer(this.carLaneBuffer, 0, simulation.lanes);
+    this.device.queue.writeBuffer(
+      this.carSegmentBuffer,
+      0,
+      simulation.segments,
+    );
+    this.device.queue.writeBuffer(
+      this.carActiveBuffer,
+      0,
+      simulation.activeCars,
     );
 
     const encoder = this.device.createCommandEncoder({
@@ -266,6 +305,6 @@ export class WebGpuRenderer {
     pass.draw(6, simulation.carCount);
     pass.end();
     this.device.queue.submit([encoder.finish()]);
-    this.drawnCarCount = simulation.carCount;
+    this.drawnCarCount = simulation.onRoadCarCount;
   }
 }

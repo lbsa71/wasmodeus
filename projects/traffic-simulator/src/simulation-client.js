@@ -24,6 +24,9 @@ export class SimulationClient {
     this.targetsX = new Uint16Array();
     this.targetsY = new Uint16Array();
     this.directions = new Uint8Array();
+    this.lanes = new Uint8Array();
+    this.activeCars = new Uint8Array();
+    this.junctionPeakDemand = new Uint16Array();
   }
 
   /**
@@ -81,6 +84,31 @@ export class SimulationClient {
     return this.carCount;
   }
 
+  /** @param {boolean} enabled */
+  setDynamicRoadsEnabled(enabled) {
+    return this.#call("setDynamicRoadsEnabled", enabled ? 1 : 0) !== 0;
+  }
+
+  get dynamicRoadsEnabled() {
+    return this.#call("getDynamicRoadsEnabled") !== 0;
+  }
+
+  get roadRevision() {
+    return this.#call("getRoadRevision");
+  }
+
+  get roadUpgradeCount() {
+    return this.#call("getRoadUpgradeCount");
+  }
+
+  get roadConstructionTileCount() {
+    return this.#call("getRoadConstructionTileCount");
+  }
+
+  get busiestJunctionPeak() {
+    return this.#call("getBusiestJunctionPeak");
+  }
+
   get tick() {
     return this.#call("getTick");
   }
@@ -97,11 +125,32 @@ export class SimulationClient {
     return this.#call("getDownstreamBlockedCount");
   }
 
+  get clockMinutes() {
+    return this.#call("getClockMinutes");
+  }
+
+  get onRoadCarCount() {
+    return this.#call("getOnRoadCarCount");
+  }
+
+  get driversAtHome() {
+    return this.#call("getDriversAtHomeCount");
+  }
+
+  get driversAtWork() {
+    return this.#call("getDriversAtWorkCount");
+  }
+
   #refreshViews() {
     const buffer = this.memory.buffer;
     this.roadTiles = new Uint8Array(
       buffer,
       this.#call("getRoadTilePointer"),
+      this.roadTileCount,
+    );
+    this.junctionPeakDemand = new Uint16Array(
+      buffer,
+      this.#call("getJunctionPeakDemandPointer"),
       this.roadTileCount,
     );
     this.x = new Float32Array(
@@ -147,6 +196,16 @@ export class SimulationClient {
     this.directions = new Uint8Array(
       buffer,
       this.#call("getCarDirectionPointer"),
+      this.carCapacity,
+    );
+    this.lanes = new Uint8Array(
+      buffer,
+      this.#call("getCarLanePointer"),
+      this.carCapacity,
+    );
+    this.activeCars = new Uint8Array(
+      buffer,
+      this.#call("getCarActivePointer"),
       this.carCapacity,
     );
   }

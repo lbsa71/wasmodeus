@@ -1,0 +1,11 @@
+{
+  "name": "@wasmodeus/space-colonization",
+  "private": true,
+  "type": "module",
+  "description": "Space colonization simulation workspace (in progress).",
+  "scripts": {
+    "build": "echo \"space-colonization simulation build is not yet implemented\"",
+    "dev": "echo \"space-colonization dev server is not yet implemented\"",
+    "test": "echo \"space-colonization tests are not yet implemented\""
+  }
+}

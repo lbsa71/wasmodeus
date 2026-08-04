@@ -1,6 +1,7 @@
 import { Camera } from "./camera.js";
 import { AdaptivePopulationController } from "./adaptive-population.js";
 import { createRenderer } from "./renderer-factory.js";
+import { formatClock } from "./driver-schedule.js";
 import { SimulationClient } from "./simulation-client.js";
 
 const CAR_COUNT = 100_000;
@@ -33,6 +34,11 @@ if (!(dynamicCarsNode instanceof HTMLInputElement)) {
   throw new Error("#dynamic-cars must be a checkbox.");
 }
 const dynamicCars = dynamicCarsNode;
+const dynamicRoadsNode = element("dynamic-roads");
+if (!(dynamicRoadsNode instanceof HTMLInputElement)) {
+  throw new Error("#dynamic-roads must be a checkbox.");
+}
+const dynamicRoads = dynamicRoadsNode;
 const desiredDemandNode = element("desired-demand");
 if (!(desiredDemandNode instanceof HTMLInputElement)) {
   throw new Error("#desired-demand must be a range input.");
@@ -40,6 +46,10 @@ if (!(desiredDemandNode instanceof HTMLInputElement)) {
 const desiredDemand = desiredDemandNode;
 const demandValue = element("demand-value");
 const activeCarsOutput = element("active-cars");
+const onRoadOutput = element("on-road");
+const atHomeOutput = element("at-home");
+const atWorkOutput = element("at-work");
+const clockOutput = element("clock");
 const fpsOutput = element("fps");
 const tickOutput = element("tick");
 const zoomOutput = element("zoom");
@@ -47,12 +57,15 @@ const backendOutput = element("backend");
 const drawnOutput = element("drawn");
 const junctionOutput = element("junction-flow");
 const downstreamOutput = element("downstream-blocked");
+const roadUpgradesOutput = element("road-upgrades");
+const junctionPeakOutput = element("junction-peak");
 const demandOutput = element("demand-state");
 const backendWarning = element("backend-warning");
 
 async function start() {
   const simulation = await SimulationClient.load("./simulation.wasm");
   simulation.initialize(Date.now() >>> 0, CAR_COUNT);
+  simulation.setDynamicRoadsEnabled(dynamicRoads.checked);
   const populationController = new AdaptivePopulationController({
     capacity: CAR_COUNT,
   });
@@ -131,6 +144,10 @@ async function start() {
     smoothedFps = smoothedFps * 0.92 + instantFps * 0.08;
     fpsOutput.textContent = `${Math.round(smoothedFps)}`;
     activeCarsOutput.textContent = simulation.carCount.toLocaleString();
+    onRoadOutput.textContent = simulation.onRoadCarCount.toLocaleString();
+    atHomeOutput.textContent = simulation.driversAtHome.toLocaleString();
+    atWorkOutput.textContent = simulation.driversAtWork.toLocaleString();
+    clockOutput.textContent = formatClock(simulation.clockMinutes);
     tickOutput.textContent = `${simulation.tick.toLocaleString()}`;
     zoomOutput.textContent = `${camera.zoom.toFixed(2)}×`;
     drawnOutput.textContent = renderer.drawnCarCount.toLocaleString();
@@ -139,6 +156,11 @@ async function start() {
       simulation.junctionCandidates.toLocaleString();
     downstreamOutput.textContent =
       simulation.downstreamBlocked.toLocaleString();
+    roadUpgradesOutput.textContent =
+      `${simulation.roadUpgradeCount.toLocaleString()} / ` +
+      simulation.roadConstructionTileCount.toLocaleString();
+    junctionPeakOutput.textContent =
+      simulation.busiestJunctionPeak.toLocaleString();
     demandOutput.textContent = dynamicCars.checked
       ? `${demandState} ${Math.round(demandPressure * 100)}%`
       : "Manual";
@@ -160,6 +182,9 @@ async function start() {
     if (!dynamicCars.checked && simulation.carCount !== requestedCars) {
       simulation.setActiveCarCount(requestedCars);
     }
+  });
+  dynamicRoads.addEventListener("change", () => {
+    simulation.setDynamicRoadsEnabled(dynamicRoads.checked);
   });
   desiredDemand.addEventListener("input", () => {
     const requestedCars = Number(desiredDemand.value);

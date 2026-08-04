@@ -12,6 +12,187 @@ const SOUTH = 4;
 const WEST = 8;
 const ROAD_MASK = 15;
 const BUILDABLE = 16;
+const FOUR_LANE = 32;
+const HOME_PLOT = 64;
+const WORK_PLOT = 128;
+
+function advanceIntoMorningRush(simulation) {
+  simulation.setClockMinutes(8 * 60 - 0.01);
+  for (let step = 0; step < 24; step += 1) {
+    simulation.step(0.25);
+  }
+}
+
+function findRoundaboutCandidate(tiles) {
+  for (let y = 1; y < GRID_SIZE - 1; y += 1) {
+    for (let x = 1; x < GRID_SIZE - 1; x += 1) {
+      const center = y * GRID_SIZE + x;
+      if ((tiles[center] & ROAD_MASK) !== ROAD_MASK) continue;
+      if ((tiles[center] & (HOME_PLOT | WORK_PLOT)) !== 0) continue;
+      const corners = [
+        center - GRID_SIZE - 1,
+        center - GRID_SIZE + 1,
+        center + GRID_SIZE - 1,
+        center + GRID_SIZE + 1,
+      ];
+      if (
+        corners.every(
+          (corner) =>
+            (tiles[corner] & BUILDABLE) !== 0 &&
+            (tiles[corner] & (HOME_PLOT | WORK_PLOT)) === 0,
+        )
+      ) {
+        return center;
+      }
+    }
+  }
+  return -1;
+}
+
+test("drivers have shared home/work plots and an 80/10/10 schedule mix", async () => {
+  const simulation = await loadSimulation();
+  simulation.initialize(42, CAR_COUNT);
+  assert.equal(typeof simulation.getDriverHomePointer, "function");
+  assert.equal(typeof simulation.getDriverWorkPointer, "function");
+  assert.equal(typeof simulation.getDriverSchedulePointer, "function");
+  assert.equal(typeof simulation.getCarActivePointer, "function");
+
+  const homes = new Uint32Array(
+    simulation.memory.buffer,
+    simulation.getDriverHomePointer(),
+    CAR_COUNT,
+  );
+  const works = new Uint32Array(
+    simulation.memory.buffer,
+    simulation.getDriverWorkPointer(),
+    CAR_COUNT,
+  );
+  const schedules = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getDriverSchedulePointer(),
+    CAR_COUNT,
+  );
+  const tiles = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getRoadTilePointer(),
+    TILE_COUNT,
+  );
+  const scheduleCounts = [0, 0, 0];
+
+  for (let index = 0; index < CAR_COUNT; index += 1) {
+    assert.notEqual(tiles[homes[index]] & HOME_PLOT, 0);
+    assert.notEqual(tiles[works[index]] & WORK_PLOT, 0);
+    assert.notEqual(homes[index], works[index]);
+    scheduleCounts[schedules[index]] += 1;
+  }
+
+  assert.ok(scheduleCounts[0] / CAR_COUNT > 0.78);
+  assert.ok(scheduleCounts[0] / CAR_COUNT < 0.82);
+  assert.ok(scheduleCounts[1] / CAR_COUNT > 0.09);
+  assert.ok(scheduleCounts[1] / CAR_COUNT < 0.11);
+  assert.ok(scheduleCounts[2] / CAR_COUNT > 0.09);
+  assert.ok(scheduleCounts[2] / CAR_COUNT < 0.11);
+  assert.ok(tiles.filter((tile) => (tile & HOME_PLOT) !== 0).length > 50);
+  assert.ok(tiles.filter((tile) => (tile & WORK_PLOT) !== 0).length > 50);
+});
+
+test("driver commutes use explicit physical units and stay under one hour", async () => {
+  const simulation = await loadSimulation();
+  simulation.initialize(42, CAR_COUNT);
+  assert.equal(simulation.getTileLengthMeters(), 50);
+  assert.equal(simulation.getSimulationMinutesPerSecond(), 1);
+  assert.equal(simulation.getMinimumDesiredSpeed(), 6);
+  assert.equal(simulation.getMaximumDesiredSpeed(), 12);
+  assert.equal(simulation.getMaximumCommuteTiles(), 240);
+  assert.equal(typeof simulation.getDriverCommuteDistancePointer, "function");
+
+  const distances = new Uint16Array(
+    simulation.memory.buffer,
+    simulation.getDriverCommuteDistancePointer(),
+    CAR_COUNT,
+  );
+  let distanceTotal = 0;
+  const sortedDistances = [];
+  for (let index = 0; index < CAR_COUNT; index += 1) {
+    assert.ok(distances[index] > 0);
+    assert.ok(distances[index] <= simulation.getMaximumCommuteTiles());
+    distanceTotal += distances[index];
+    sortedDistances.push(distances[index]);
+    const slowestTravelMinutes =
+      (distances[index] / simulation.getMinimumDesiredSpeed()) *
+      simulation.getSimulationMinutesPerSecond();
+    assert.ok(slowestTravelMinutes <= 40);
+  }
+  sortedDistances.sort((left, right) => left - right);
+  assert.ok(distanceTotal / CAR_COUNT <= 100);
+  assert.ok(sortedDistances[Math.floor(CAR_COUNT * 0.9)] <= 140);
+});
+
+test("the 24-hour clock activates commutes and keeps driver counts balanced", async () => {
+  const simulation = await loadSimulation();
+  simulation.initialize(42, 20_000);
+  assert.equal(typeof simulation.getClockMinutes, "function");
+  assert.equal(typeof simulation.setClockMinutes, "function");
+  assert.equal(typeof simulation.getOnRoadCarCount, "function");
+  assert.equal(typeof simulation.getDriversAtHomeCount, "function");
+  assert.equal(typeof simulation.getDriversAtWorkCount, "function");
+  assert.equal(simulation.getOnRoadCarCount(), 0);
+
+  simulation.setClockMinutes(8 * 60 - 0.01);
+  simulation.step(0.01);
+  assert.ok(simulation.getOnRoadCarCount() > 0);
+  assert.equal(
+    simulation.getOnRoadCarCount() +
+      simulation.getDriversAtHomeCount() +
+      simulation.getDriversAtWorkCount(),
+    simulation.getCarCount(),
+  );
+
+  simulation.setClockMinutes(24 * 60 - 0.1);
+  simulation.step(0.25);
+  assert.ok(simulation.getClockMinutes() >= 0);
+  assert.ok(simulation.getClockMinutes() < 2);
+});
+
+test("day-shift drivers complete both commutes near their schedule", async () => {
+  const simulation = await loadSimulation();
+  const driverCount = 2_000;
+  simulation.initialize(42, driverCount);
+
+  for (let step = 0; step < 420; step += 1) {
+    simulation.step(0.25);
+  }
+
+  const schedules = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getDriverSchedulePointer(),
+    driverCount,
+  );
+  const states = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getDriverStatePointer(),
+    driverCount,
+  );
+  let dayDrivers = 0;
+  let atWork = 0;
+  for (let index = 0; index < driverCount; index += 1) {
+    if (schedules[index] !== 0) continue;
+    dayDrivers += 1;
+    if (states[index] === 2) atWork += 1;
+  }
+  assert.ok(atWork / dayDrivers > 0.98);
+
+  simulation.setClockMinutes(16 * 60 + 59.99);
+  for (let step = 0; step < 244; step += 1) {
+    simulation.step(0.25);
+  }
+
+  let atHome = 0;
+  for (let index = 0; index < driverCount; index += 1) {
+    if (schedules[index] === 0 && states[index] === 0) atHome += 1;
+  }
+  assert.ok(atHome / dayDrivers > 0.98);
+});
 
 test("the WASM core creates the specified world and car population", async () => {
   const simulation = await loadSimulation();
@@ -129,7 +310,12 @@ test("hierarchical roads are sparse, branching, and reciprocal", async () => {
       const tile = tiles[index];
       const mask = tile & ROAD_MASK;
       assert.ok(allowedMasks.has(mask), `invalid tile mask ${mask} at ${x},${y}`);
-      assert.equal(tile & ~(ROAD_MASK | BUILDABLE), 0);
+      assert.equal(
+        tile & ~(
+          ROAD_MASK | BUILDABLE | FOUR_LANE | HOME_PLOT | WORK_PLOT
+        ),
+        0,
+      );
       if (mask !== 0) {
         roadCount += 1;
         assert.notEqual(tile & BUILDABLE, 0);
@@ -184,6 +370,96 @@ test("hierarchical roads are sparse, branching, and reciprocal", async () => {
   );
   assert.equal(simulation.isRoad(-1, 0), 0);
   assert.equal(simulation.isRoad(GRID_SIZE, 0), 0);
+});
+
+test("four-lane tiles form long buffered straight arterial stretches", async () => {
+  const simulation = await loadSimulation();
+  simulation.initialize(42, 0);
+  const tiles = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getRoadTilePointer(),
+    TILE_COUNT,
+  );
+  let fourLaneTiles = 0;
+  const runLengths = [];
+
+  for (let y = 0; y < GRID_SIZE; y += 1) {
+    let run = 0;
+    for (let x = 0; x <= GRID_SIZE; x += 1) {
+      const tile = x < GRID_SIZE ? tiles[y * GRID_SIZE + x] : 0;
+      if ((tile & FOUR_LANE) !== 0 && (tile & ROAD_MASK) === EAST + WEST) {
+        fourLaneTiles += 1;
+        run += 1;
+      } else if (run !== 0) {
+        runLengths.push(run);
+        run = 0;
+      }
+    }
+  }
+  for (let x = 0; x < GRID_SIZE; x += 1) {
+    let run = 0;
+    for (let y = 0; y <= GRID_SIZE; y += 1) {
+      const tile = y < GRID_SIZE ? tiles[y * GRID_SIZE + x] : 0;
+      if ((tile & FOUR_LANE) !== 0 && (tile & ROAD_MASK) === NORTH + SOUTH) {
+        fourLaneTiles += 1;
+        run += 1;
+      } else if (run !== 0) {
+        runLengths.push(run);
+        run = 0;
+      }
+    }
+  }
+
+  assert.ok(fourLaneTiles > 1_000);
+  assert.ok(runLengths.length > 25);
+  assert.ok(runLengths.every((length) => length >= 12));
+});
+
+test("cars overtake on four-lane arterials and predominantly keep right", async () => {
+  const simulation = await loadSimulation();
+  simulation.initialize(42, 50_000);
+  advanceIntoMorningRush(simulation);
+  assert.equal(typeof simulation.getCarLanePointer, "function");
+  const lanes = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getCarLanePointer(),
+    50_000,
+  );
+  const segments = new Uint32Array(
+    simulation.memory.buffer,
+    simulation.getCarSegmentPointer(),
+    50_000,
+  );
+  const tiles = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getRoadTilePointer(),
+    TILE_COUNT,
+  );
+  const active = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getCarActivePointer(),
+    50_000,
+  );
+  let passingSeen = 0;
+  let arterialSlowSamples = 0;
+
+  for (let tick = 0; tick < 180; tick += 1) {
+    simulation.step(1 / 30);
+    if (tick % 15 !== 0) continue;
+    for (let index = 0; index < lanes.length; index += 1) {
+      if (active[index] === 0) continue;
+      assert.ok(lanes[index] <= 1);
+      if (lanes[index] === 1) {
+        passingSeen += 1;
+        assert.notEqual(tiles[segments[index]] & FOUR_LANE, 0);
+      } else if ((tiles[segments[index]] & FOUR_LANE) !== 0) {
+        arterialSlowSamples += 1;
+      }
+    }
+  }
+
+  assert.ok(passingSeen > 100);
+  assert.ok(arterialSlowSamples > passingSeen * 2);
 });
 
 test("the sparse hierarchy reaches every major area", async () => {
@@ -321,7 +597,7 @@ test("cars have compact, valid, individual state", async () => {
     assert.ok(x[index] >= 0 && x[index] < GRID_SIZE);
     assert.ok(y[index] >= 0 && y[index] < GRID_SIZE);
     assert.ok(simulation.isRoad(Math.floor(x[index]), Math.floor(y[index])));
-    assert.ok(speeds[index] >= 2 && speeds[index] <= 8);
+    assert.ok(speeds[index] >= 6 && speeds[index] <= 12);
     assert.ok(targetsX[index] >= 0 && targetsX[index] < GRID_SIZE);
     assert.ok(targetsY[index] >= 0 && targetsY[index] < GRID_SIZE);
     assert.ok(simulation.isRoad(targetsX[index], targetsY[index]));
@@ -390,24 +666,25 @@ test("regional activity centers distribute routes across the hierarchy", async (
 test("cars expose legal travel directions across both lanes", async () => {
   const simulation = await loadSimulation();
   simulation.initialize(73, CAR_COUNT);
+  advanceIntoMorningRush(simulation);
   const tiles = new Uint8Array(
     simulation.memory.buffer,
     simulation.getRoadTilePointer(),
     TILE_COUNT,
   );
-  const x = new Float32Array(
-    simulation.memory.buffer,
-    simulation.getCarXPointer(),
-    CAR_COUNT,
-  );
-  const y = new Float32Array(
-    simulation.memory.buffer,
-    simulation.getCarYPointer(),
-    CAR_COUNT,
-  );
   const directions = new Uint8Array(
     simulation.memory.buffer,
     simulation.getCarDirectionPointer(),
+    CAR_COUNT,
+  );
+  const segments = new Uint32Array(
+    simulation.memory.buffer,
+    simulation.getCarSegmentPointer(),
+    CAR_COUNT,
+  );
+  const active = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getCarActivePointer(),
     CAR_COUNT,
   );
   const directionCounts = new Map([
@@ -418,18 +695,19 @@ test("cars expose legal travel directions across both lanes", async () => {
   ]);
 
   for (let index = 0; index < CAR_COUNT; index += 1) {
+    if (active[index] === 0) continue;
     const direction = directions[index];
-    const tile = tiles[Math.floor(y[index]) * GRID_SIZE + Math.floor(x[index])];
+    const tile = tiles[segments[index]];
     assert.ok((tile & direction) !== 0);
     directionCounts.set(direction, (directionCounts.get(direction) ?? 0) + 1);
   }
 
   for (const count of directionCounts.values()) {
-    assert.ok(count > 1_000);
+    assert.ok(count > 100);
   }
 });
 
-test("initial placement never stacks cars on the same tile", async () => {
+test("parked drivers share plots without entering traffic", async () => {
   const simulation = await loadSimulation();
   simulation.initialize(404, CAR_COUNT);
   const x = new Float32Array(
@@ -443,20 +721,38 @@ test("initial placement never stacks cars on the same tile", async () => {
     CAR_COUNT,
   );
   const occupiedTiles = new Set();
+  const active = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getCarActivePointer(),
+    CAR_COUNT,
+  );
 
   for (let index = 0; index < CAR_COUNT; index += 1) {
     occupiedTiles.add(Math.floor(y[index]) * GRID_SIZE + Math.floor(x[index]));
   }
 
-  assert.equal(occupiedTiles.size, CAR_COUNT);
+  assert.ok(active.every((value) => value === 0));
+  assert.ok(occupiedTiles.size < 300);
+  assert.equal(simulation.getOnRoadCarCount(), 0);
 });
 
 test("lane buckets preserve minimum headway and reduce actual speed", async () => {
   const simulation = await loadSimulation();
   simulation.initialize(808, CAR_COUNT);
+  advanceIntoMorningRush(simulation);
   const directions = new Uint8Array(
     simulation.memory.buffer,
     simulation.getCarDirectionPointer(),
+    CAR_COUNT,
+  );
+  const lanes = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getCarLanePointer(),
+    CAR_COUNT,
+  );
+  const active = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getCarActivePointer(),
     CAR_COUNT,
   );
   const desiredSpeeds = new Float32Array(
@@ -494,6 +790,7 @@ test("lane buckets preserve minimum headway and reduce actual speed", async () =
 
     const laneOccupants = new Map();
     for (let index = 0; index < CAR_COUNT; index += 1) {
+      if (active[index] === 0) continue;
       assert.ok(actualSpeeds[index] >= 0);
       assert.ok(actualSpeeds[index] <= desiredSpeeds[index] + 0.001);
       if (actualSpeeds[index] + 0.01 < desiredSpeeds[index]) {
@@ -508,7 +805,7 @@ test("lane buckets preserve minimum headway and reduce actual speed", async () =
             : directions[index] === SOUTH
               ? 2
               : 3;
-      const key = segments[index] * 4 + directionIndex;
+      const key = (segments[index] * 4 + directionIndex) * 2 + lanes[index];
       const positions = laneOccupants.get(key);
       const laneState = { car: index, progress: progress[index] };
       if (positions) positions.push(laneState);
@@ -521,7 +818,7 @@ test("lane buckets preserve minimum headway and reduce actual speed", async () =
         const gap = positions[index].progress - positions[index - 1].progress;
         assert.ok(
           gap >= minimumCenterGap - 0.002,
-          `gap ${gap} below ${minimumCenterGap} in lane ${laneKey} (mask ${roadTiles[Math.floor(laneKey / 4)]}) between cars ${positions[index - 1].car}/${positions[index].car} at tick ${tick}`,
+          `gap ${gap} below ${minimumCenterGap} in lane ${laneKey} (mask ${roadTiles[Math.floor(laneKey / 8)]}) between cars ${positions[index - 1].car}/${positions[index].car} at tick ${tick}`,
         );
       }
     }
@@ -533,6 +830,7 @@ test("lane buckets preserve minimum headway and reduce actual speed", async () =
 test("the sparse network sustains traffic without systemic gridlock", async () => {
   const simulation = await loadSimulation();
   simulation.initialize(42, CAR_COUNT);
+  advanceIntoMorningRush(simulation);
   const actualSpeeds = new Float32Array(
     simulation.memory.buffer,
     simulation.getCarActualSpeedPointer(),
@@ -543,6 +841,11 @@ test("the sparse network sustains traffic without systemic gridlock", async () =
     simulation.getCarSpeedPointer(),
     CAR_COUNT,
   );
+  const active = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getCarActivePointer(),
+    CAR_COUNT,
+  );
 
   for (let tick = 0; tick < 600; tick += 1) {
     simulation.step(1 / 30);
@@ -551,7 +854,10 @@ test("the sparse network sustains traffic without systemic gridlock", async () =
   let stopped = 0;
   let severelyDelayed = 0;
   let speedTotal = 0;
+  let measuredCars = 0;
   for (let index = 0; index < CAR_COUNT; index += 1) {
+    if (active[index] === 0) continue;
+    measuredCars += 1;
     const speed = actualSpeeds[index];
     speedTotal += speed;
     if (speed < 0.05) stopped += 1;
@@ -559,18 +865,20 @@ test("the sparse network sustains traffic without systemic gridlock", async () =
   }
 
   const metrics = [
-    `stopped=${(stopped / CAR_COUNT).toFixed(3)}`,
-    `severelyDelayed=${(severelyDelayed / CAR_COUNT).toFixed(3)}`,
-    `meanSpeed=${(speedTotal / CAR_COUNT).toFixed(3)}`,
+    `stopped=${(stopped / measuredCars).toFixed(3)}`,
+    `severelyDelayed=${(severelyDelayed / measuredCars).toFixed(3)}`,
+    `meanSpeed=${(speedTotal / measuredCars).toFixed(3)}`,
   ].join(", ");
-  assert.ok(stopped / CAR_COUNT < 0.25, metrics);
-  assert.ok(severelyDelayed / CAR_COUNT < 0.7, metrics);
-  assert.ok(speedTotal / CAR_COUNT > 1.0, metrics);
+  assert.ok(measuredCars > 5_000, metrics);
+  assert.ok(stopped / measuredCars < 0.25, metrics);
+  assert.ok(severelyDelayed / measuredCars < 0.7, metrics);
+  assert.ok(speedTotal / measuredCars > 1.0, metrics);
 });
 
 test("the intersection controller exposes useful admission telemetry", async () => {
   const simulation = await loadSimulation();
   simulation.initialize(42, 20_000);
+  advanceIntoMorningRush(simulation);
   for (let tick = 0; tick < 30; tick += 1) {
     simulation.step(1 / 30);
   }
@@ -581,9 +889,84 @@ test("the intersection controller exposes useful admission telemetry", async () 
   assert.ok(simulation.getJunctionGrantCount() > 0);
 });
 
+test("junctions retain per-tile peak demand measurements", async () => {
+  const simulation = await loadSimulation();
+  simulation.initialize(42, 20_000);
+  assert.equal(typeof simulation.getJunctionPeakDemandPointer, "function");
+  assert.equal(typeof simulation.getBusiestJunctionPeak, "function");
+  advanceIntoMorningRush(simulation);
+  for (let tick = 0; tick < 60; tick += 1) {
+    simulation.step(1 / 30);
+  }
+
+  const peaks = new Uint16Array(
+    simulation.memory.buffer,
+    simulation.getJunctionPeakDemandPointer(),
+    TILE_COUNT,
+  );
+  let observedPeak = 0;
+  for (const peak of peaks) observedPeak = Math.max(observedPeak, peak);
+  assert.ok(observedPeak > 0);
+  assert.equal(simulation.getBusiestJunctionPeak(), observedPeak);
+});
+
+test("dynamic roads replace a crossing with a frugal square bypass", async () => {
+  const simulation = await loadSimulation();
+  simulation.initialize(42, 20_000);
+  const tiles = new Uint8Array(
+    simulation.memory.buffer,
+    simulation.getRoadTilePointer(),
+    TILE_COUNT,
+  );
+  const center = findRoundaboutCandidate(tiles);
+  assert.ok(center >= 0);
+  assert.equal(simulation.getDynamicRoadsEnabled(), 1);
+  assert.equal(simulation.getRoadRevision(), 0);
+
+  simulation.setDynamicRoadsEnabled(0);
+  assert.equal(simulation.requestRoadUpgrade(center), 0);
+  assert.equal(simulation.getRoadRevision(), 0);
+
+  simulation.setDynamicRoadsEnabled(1);
+  const roadsBefore = tiles.filter((tile) => (tile & ROAD_MASK) !== 0).length;
+  assert.equal(simulation.requestRoadUpgrade(center), 1);
+  const roadsAfter = tiles.filter((tile) => (tile & ROAD_MASK) !== 0).length;
+  assert.equal(tiles[center] & ROAD_MASK, 0);
+  assert.ok(roadsAfter - roadsBefore <= 3);
+  assert.ok(simulation.getRoadConstructionTileCount() <= 4);
+  assert.equal(simulation.getRoadUpgradeCount(), 1);
+  assert.equal(simulation.getRoadRevision(), 1);
+
+  const north = center - GRID_SIZE;
+  const east = center + 1;
+  const south = center + GRID_SIZE;
+  const west = center - 1;
+  const northEast = north + 1;
+  const southEast = south + 1;
+  const southWest = south - 1;
+  const northWest = north - 1;
+  assert.notEqual(tiles[north] & EAST, 0);
+  assert.notEqual(tiles[northEast] & WEST, 0);
+  assert.notEqual(tiles[northEast] & SOUTH, 0);
+  assert.notEqual(tiles[east] & NORTH, 0);
+  assert.notEqual(tiles[east] & SOUTH, 0);
+  assert.notEqual(tiles[southEast] & NORTH, 0);
+  assert.notEqual(tiles[southEast] & WEST, 0);
+  assert.notEqual(tiles[south] & EAST, 0);
+  assert.notEqual(tiles[south] & WEST, 0);
+  assert.notEqual(tiles[southWest] & EAST, 0);
+  assert.notEqual(tiles[southWest] & NORTH, 0);
+  assert.notEqual(tiles[west] & SOUTH, 0);
+  assert.notEqual(tiles[west] & NORTH, 0);
+  assert.notEqual(tiles[northWest] & SOUTH, 0);
+  assert.notEqual(tiles[northWest] & EAST, 0);
+  assert.notEqual(tiles[north] & WEST, 0);
+});
+
 test("adjacent junctions are acquired as one atomic corridor", async () => {
   const simulation = await loadSimulation();
   simulation.initialize(42, 20_000);
+  advanceIntoMorningRush(simulation);
   assert.equal(
     typeof simulation.getCarReservationLengthPointer,
     "function",
@@ -673,6 +1056,8 @@ test("seeded initialization is deterministic", async () => {
 test("cars advance, remain on roads, and keep valid targets", async () => {
   const simulation = await loadSimulation();
   simulation.initialize(99, 10_000);
+  advanceIntoMorningRush(simulation);
+  const startingTick = simulation.getTick();
 
   const before = new Float32Array(
     simulation.memory.buffer,
@@ -704,13 +1089,14 @@ test("cars advance, remain on roads, and keep valid targets", async () => {
     const centeredY = Math.abs(y[index] - Math.floor(y[index]) - 0.5) < 0.001;
     assert.ok(centeredX || centeredY);
   }
-  assert.equal(simulation.getTick(), 120);
+  assert.equal(simulation.getTick(), startingTick + 120);
 });
 
 test("cars cross tile boundaries only through reciprocal connections", async () => {
   const simulation = await loadSimulation();
   const population = 1_000;
   simulation.initialize(2026, population);
+  advanceIntoMorningRush(simulation);
   const tiles = new Uint8Array(
     simulation.memory.buffer,
     simulation.getRoadTilePointer(),

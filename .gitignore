@@ -1,6 +1,8 @@
-build/
 node_modules/
-public/app.js
-public/app.js.map
-public/simulation.wasm
-public/simulation.wasm.map
+projects/*/build/
+projects/*/public/app.js
+projects/*/public/app.js.map
+projects/*/public/simulation.wasm
+projects/*/public/simulation.wasm.map
+public/
+build/

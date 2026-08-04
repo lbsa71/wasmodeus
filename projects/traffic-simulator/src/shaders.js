@@ -61,8 +61,12 @@ fn fragmentMain(@builtin(position) fragment: vec4f) -> @location(0) vec4f {
   let tileData = roadTileData(tile);
   let connectivity = tileData & 15u;
   let buildable = (tileData & 16u) != 0u;
+  let fourLane = (tileData & 32u) != 0u;
+  let homePlot = (tileData & 64u) != 0u;
+  let workPlot = (tileData & 128u) != 0u;
   let pixelWorld = 1.0 / scene.zoom;
-  let halfWidth = max(scene.roadHalfWidth, min(0.5, pixelWorld * 0.58));
+  let designedHalfWidth = select(scene.roadHalfWidth, 0.43, fourLane);
+  let halfWidth = max(designedHalfWidth, min(0.5, pixelWorld * 0.58));
   let centeredX = abs(local.x - 0.5) <= halfWidth;
   let centeredY = abs(local.y - 0.5) <= halfWidth;
   let horizontal =
@@ -85,13 +89,40 @@ fn fragmentMain(@builtin(position) fragment: vec4f) -> @location(0) vec4f {
     1.0,
     scene.logicalZoom >= 5.0 && (horizontalDivider || verticalDivider),
   );
+  let laneStripeDistance = 0.195;
+  let horizontalLaneStripe =
+    horizontal &&
+    abs(abs(local.y - 0.5) - laneStripeDistance) <= dividerHalfWidth * 0.65;
+  let verticalLaneStripe =
+    vertical &&
+    abs(abs(local.x - 0.5) - laneStripeDistance) <= dividerHalfWidth * 0.65;
+  let dashed = fract((local.x + local.y) * 4.0) < 0.58;
+  let laneStripeMask = select(
+    0.0,
+    1.0,
+    scene.logicalZoom >= 5.0 &&
+      fourLane &&
+      dashed &&
+      (horizontalLaneStripe || verticalLaneStripe),
+  );
 
   let blockedColor = vec3f(0.012, 0.040, 0.034);
   let landColor = vec3f(0.035, 0.082, 0.071);
-  let tileColor = select(blockedColor, landColor, buildable);
+  let homePlotColor = vec3f(0.08, 0.27, 0.52);
+  let workPlotColor = vec3f(0.62, 0.22, 0.08);
+  var tileColor = select(blockedColor, landColor, buildable);
+  tileColor = select(tileColor, homePlotColor, homePlot);
+  tileColor = select(tileColor, workPlotColor, workPlot);
   let roadColor = vec3f(0.185, 0.275, 0.240);
   var color = mix(tileColor, roadColor, roadMask);
   color = mix(color, vec3f(0.68, 0.61, 0.30), dividerMask * roadMask);
+  color = mix(color, vec3f(0.72, 0.75, 0.67), laneStripeMask * roadMask);
+  let plotColor = select(homePlotColor, workPlotColor, workPlot);
+  let plotEdge = max(abs(local.x - 0.5), abs(local.y - 0.5));
+  let plotMarker =
+    (homePlot || workPlot) &&
+    (scene.logicalZoom < 4.0 || (plotEdge >= 0.34 && plotEdge <= 0.47));
+  color = mix(color, plotColor, select(0.0, 0.82, plotMarker));
 
   if (scene.logicalZoom >= 2.0) {
     let edgeDistance = min(
@@ -113,6 +144,10 @@ ${SCENE_DEFINITION}
 @group(0) @binding(1) var<storage, read> carX: array<f32>;
 @group(0) @binding(2) var<storage, read> carY: array<f32>;
 @group(0) @binding(3) var<storage, read> packedDirections: array<u32>;
+@group(0) @binding(4) var<storage, read> packedLanes: array<u32>;
+@group(0) @binding(5) var<storage, read> carSegments: array<u32>;
+@group(0) @binding(6) var<storage, read> packedRoadTiles: array<u32>;
+@group(0) @binding(7) var<storage, read> packedActiveCars: array<u32>;
 
 struct VertexOutput {
   @builtin(position) position: vec4f,
@@ -123,6 +158,23 @@ fn directionAt(index: u32) -> u32 {
   let packed = packedDirections[index >> 2u];
   let shift = (index & 3u) * 8u;
   return (packed >> shift) & 15u;
+}
+
+fn packedByteAt(bufferValue: u32, index: u32) -> u32 {
+  let shift = (index & 3u) * 8u;
+  return (bufferValue >> shift) & 255u;
+}
+
+fn laneAt(index: u32) -> u32 {
+  return packedByteAt(packedLanes[index >> 2u], index) & 1u;
+}
+
+fn roadTileDataAt(index: u32) -> u32 {
+  return packedByteAt(packedRoadTiles[index >> 2u], index);
+}
+
+fn activeAt(index: u32) -> bool {
+  return packedByteAt(packedActiveCars[index >> 2u], index) != 0u;
 }
 
 @vertex
@@ -138,16 +190,28 @@ fn vertexMain(
     vec2f(0.5, -0.5),
     vec2f(0.5, 0.5),
   );
+  var output: VertexOutput;
+  let carIsActive = activeAt(instanceIndex);
+  if (!carIsActive) {
+    output.position = vec4f(2.0, 2.0, 0.0, 1.0);
+    output.shade = 0.0;
+    return output;
+  }
   let direction = directionAt(instanceIndex);
+  let lane = laneAt(instanceIndex);
+  let tileData = roadTileDataAt(carSegments[instanceIndex]);
+  let fourLane = (tileData & 32u) != 0u;
+  let laneDistance = select(0.29, 0.10, lane == 1u);
+  let offset = select(0.11, laneDistance, fourLane);
   var laneOffset = vec2f(0.0);
   if (direction == 2u) {
-    laneOffset.y = 0.11;
+    laneOffset.y = offset;
   } else if (direction == 8u) {
-    laneOffset.y = -0.11;
+    laneOffset.y = -offset;
   } else if (direction == 4u) {
-    laneOffset.x = -0.11;
+    laneOffset.x = -offset;
   } else if (direction == 1u) {
-    laneOffset.x = 0.11;
+    laneOffset.x = offset;
   }
   let world =
     vec2f(carX[instanceIndex], carY[instanceIndex]) + laneOffset;
@@ -159,7 +223,6 @@ fn vertexMain(
     1.0 - pixel.y / scene.viewport.y * 2.0,
   );
 
-  var output: VertexOutput;
   output.position = vec4f(clip, 0.0, 1.0);
   output.shade = f32((instanceIndex * 17u) % 31u) / 310.0;
   return output;

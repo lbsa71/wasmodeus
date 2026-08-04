@@ -12,6 +12,8 @@ export function createRoadOverviewPixels(roadTiles, gridSize) {
     const tileData = roadTiles[tile] ?? 0;
     const mask = tileData & 15;
     const buildable = (tileData & 16) !== 0;
+    const homePlot = (tileData & 64) !== 0;
+    const workPlot = (tileData & 128) !== 0;
     const pixel = tile * 4;
     if (!buildable) {
       pixels[pixel] = 4;
@@ -21,6 +23,14 @@ export function createRoadOverviewPixels(roadTiles, gridSize) {
       pixels[pixel] = 11;
       pixels[pixel + 1] = 31;
       pixels[pixel + 2] = 25;
+    } else if (homePlot) {
+      pixels[pixel] = 47;
+      pixels[pixel + 1] = 104;
+      pixels[pixel + 2] = 166;
+    } else if (workPlot) {
+      pixels[pixel] = 174;
+      pixels[pixel + 1] = 88;
+      pixels[pixel + 2] = 48;
     } else {
       const degree =
         Number((mask & 1) !== 0) +

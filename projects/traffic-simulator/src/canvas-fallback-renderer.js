@@ -30,16 +30,24 @@ export class CanvasFallbackRenderer {
     if (!overviewContext) {
       throw new Error("Unable to create the road overview canvas.");
     }
+    this.overviewContext = overviewContext;
+    this.roadRevision = -1;
+    this.#refreshRoadOverview();
+  }
+
+  #refreshRoadOverview() {
+    const simulation = this.simulation;
     const overviewPixels = createRoadOverviewPixels(
       simulation.roadTiles,
       simulation.gridSize,
     );
-    const overviewImage = overviewContext.createImageData(
+    const overviewImage = this.overviewContext.createImageData(
       simulation.gridSize,
       simulation.gridSize,
     );
     overviewImage.data.set(overviewPixels);
-    overviewContext.putImageData(overviewImage, 0, 0);
+    this.overviewContext.putImageData(overviewImage, 0, 0);
+    this.roadRevision = simulation.roadRevision;
   }
 
   /** @param {number} width @param {number} height */
@@ -58,6 +66,9 @@ export class CanvasFallbackRenderer {
     const context = this.context;
     const camera = this.camera;
     const simulation = this.simulation;
+    if (simulation.roadRevision !== this.roadRevision) {
+      this.#refreshRoadOverview();
+    }
     const origin = camera.worldToScreen(0, 0);
 
     context.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
@@ -118,6 +129,7 @@ export class CanvasFallbackRenderer {
     }
 
     this.context.beginPath();
+    const arterialPath = new Path2D();
     const startX = Math.max(0, Math.floor(bounds.left));
     const endX = Math.min(gridSize - 1, Math.ceil(bounds.right));
     const startY = Math.max(0, Math.floor(bounds.top));
@@ -130,24 +142,39 @@ export class CanvasFallbackRenderer {
         if ((tileData & 16) === 0) {
           this.context.fillStyle = "#04110f";
           this.context.fillRect(x, y, 1, 1);
+        } else if ((tileData & 64) !== 0) {
+          this.context.fillStyle = "#1a5792";
+          this.context.fillRect(x, y, 1, 1);
+        } else if ((tileData & 128) !== 0) {
+          this.context.fillStyle = "#9e3818";
+          this.context.fillRect(x, y, 1, 1);
         }
         const centerX = x + 0.5;
         const centerY = y + 0.5;
+        const arterial = (tileData & 32) !== 0 ? arterialPath : null;
         if ((mask & 1) !== 0) {
           this.context.moveTo(centerX, centerY);
           this.context.lineTo(centerX, y);
+          arterial?.moveTo(centerX, centerY);
+          arterial?.lineTo(centerX, y);
         }
         if ((mask & 2) !== 0) {
           this.context.moveTo(centerX, centerY);
           this.context.lineTo(x + 1, centerY);
+          arterial?.moveTo(centerX, centerY);
+          arterial?.lineTo(x + 1, centerY);
         }
         if ((mask & 4) !== 0) {
           this.context.moveTo(centerX, centerY);
           this.context.lineTo(centerX, y + 1);
+          arterial?.moveTo(centerX, centerY);
+          arterial?.lineTo(centerX, y + 1);
         }
         if ((mask & 8) !== 0) {
           this.context.moveTo(centerX, centerY);
           this.context.lineTo(x, centerY);
+          arterial?.moveTo(centerX, centerY);
+          arterial?.lineTo(x, centerY);
         }
       }
     }
@@ -155,6 +182,8 @@ export class CanvasFallbackRenderer {
     this.context.lineCap = "square";
     this.context.lineWidth = Math.max(0.46, 0.6 / this.camera.zoom);
     this.context.stroke();
+    this.context.lineWidth = Math.max(0.86, 0.95 / this.camera.zoom);
+    this.context.stroke(arterialPath);
     if (this.camera.zoom >= 5) {
       this.context.strokeStyle = "rgba(214, 190, 93, 0.72)";
       this.context.lineWidth = Math.max(0.025, 0.7 / this.camera.zoom);
@@ -180,13 +209,18 @@ export class CanvasFallbackRenderer {
 
     this.context.beginPath();
     for (let index = 0; index < simulation.carCount; index += stride) {
+      if (simulation.activeCars[index] === 0) continue;
       const centerX = simulation.x[index];
       const centerY = simulation.y[index];
       const lane = lanePosition(
         centerX,
         centerY,
         simulation.directions[index],
-        0.11,
+        {
+          fourLane:
+            (simulation.roadTiles[simulation.segments[index]] & 32) !== 0,
+          lane: simulation.lanes[index],
+        },
       );
       const { x, y } = lane;
       if (

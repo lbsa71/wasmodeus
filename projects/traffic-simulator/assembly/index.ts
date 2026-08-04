@@ -1,7 +1,9 @@
 const GRID_SIZE: i32 = 1_000;
 const TILE_COUNT: i32 = GRID_SIZE * GRID_SIZE;
 const MAX_CARS: i32 = 100_000;
-const SEGMENT_BUCKET_COUNT: i32 = TILE_COUNT * 4;
+const LANES_PER_DIRECTION: i32 = 2;
+const SEGMENT_BUCKET_COUNT: i32 =
+  TILE_COUNT * 4 * LANES_PER_DIRECTION;
 const NON_BUILDABLE_TARGET: i32 = TILE_COUNT * 23 / 100;
 const AREA_MAX_DEPTH: i32 = 6;
 const REGION_AXIS: i32 = 16;
@@ -9,12 +11,25 @@ const REGION_COUNT: i32 = REGION_AXIS * REGION_AXIS;
 const REGION_ROUTE_STRIDE: i32 = REGION_COUNT / 4;
 const NO_TILE: u32 = 0xffff_ffff;
 
+const TILE_LENGTH_METERS: f32 = 50.0;
+const MIN_DESIRED_SPEED: f32 = 6.0;
+const MAX_DESIRED_SPEED: f32 = 12.0;
+const MAX_COMMUTE_TILES: i32 = 240;
+const WORK_ARRIVAL_BUFFER_MINUTES: i32 = 45;
+const ROAD_ADAPTATION_INTERVAL_TICKS: i32 = 900;
+const MINIMUM_JUNCTION_PEAK_DEMAND: i32 = 2;
+const MAX_DYNAMIC_ROAD_TILES: i32 = 256;
 const VEHICLE_LENGTH: f32 = 0.16;
 const MINIMUM_GAP: f32 = 0.06;
 const COLLISION_PADDING: f32 = 0.02;
-const TIME_HEADWAY: f32 = 0.18;
-const ACCELERATION: f32 = 12.0;
-const DECELERATION: f32 = 12.0;
+const TIME_HEADWAY: f32 = 0.04;
+const ACCELERATION: f32 = 60.0;
+const DECELERATION: f32 = 120.0;
+const OVERTAKE_TRIGGER_DISTANCE: f32 = 0.5;
+const LANE_CHANGE_FRONT_CLEARANCE: f32 = 1.0;
+const LANE_CHANGE_REAR_CLEARANCE: f32 = 0.5;
+const LANE_END_LOOKAHEAD: f32 = 3.0;
+const URGENT_MERGE_CLEARANCE: f32 = 0.5;
 const JUNCTION_CLEARANCE: f32 = 0.72;
 const STOP_LINE_DISTANCE: f32 = 0.12;
 const MAX_RESERVATION_TILES: i32 = 8;
@@ -26,11 +41,39 @@ const SOUTH: u8 = 4;
 const WEST: u8 = 8;
 const ROAD_MASK: u8 = NORTH | EAST | SOUTH | WEST;
 const BUILDABLE: u8 = 16;
+const FOUR_LANE: u8 = 32;
+const HOME_PLOT: u8 = 64;
+const WORK_PLOT: u8 = 128;
+const MINIMUM_ARTERIAL_RUN: i32 = 20;
+const ARTERIAL_TRANSITION_BUFFER: i32 = 4;
+const DAY_MINUTES: f32 = 1_440.0;
+const SIM_MINUTES_PER_SECOND: f32 = 1.0;
+const INITIAL_CLOCK_MINUTES: f32 = 450.0;
+
+const SCHEDULE_DAY: u8 = 0;
+const SCHEDULE_EVENING: u8 = 1;
+const SCHEDULE_NIGHT: u8 = 2;
+const DRIVER_AT_HOME: u8 = 0;
+const DRIVER_TO_WORK: u8 = 1;
+const DRIVER_AT_WORK: u8 = 2;
+const DRIVER_TO_HOME: u8 = 3;
+const DEPARTURE_NONE: u8 = 0;
+const DEPARTURE_TO_WORK: u8 = 1;
+const DEPARTURE_TO_HOME: u8 = 2;
 
 let carCount: i32 = 0;
 let carCapacity: i32 = 0;
 let tick: i32 = 0;
 let randomState: u32 = 1;
+let clockMinutes: f32 = INITIAL_CLOCK_MINUTES;
+let onRoadCarCount: i32 = 0;
+let driversAtHomeCount: i32 = 0;
+let driversAtWorkCount: i32 = 0;
+let dynamicRoadsEnabled: bool = true;
+let roadRevision: i32 = 0;
+let roadUpgradeCount: i32 = 0;
+let roadConstructionTileCount: i32 = 0;
+let busiestJunctionPeak: i32 = 0;
 
 let roadTiles = new StaticArray<u8>(0);
 let routeAncestors = new StaticArray<u32>(0);
@@ -39,6 +82,12 @@ let regionalHubs = new StaticArray<u32>(0);
 let regionalDirections = new StaticArray<u8>(0);
 let routingQueue = new StaticArray<u32>(0);
 let regionalVisited = new StaticArray<u16>(0);
+let regionalDistance = new StaticArray<u16>(0);
+let regionalHubDistances = new StaticArray<u16>(0);
+let homePlotRegions = new StaticArray<u8>(0);
+let workPlotRegions = new StaticArray<u8>(0);
+let homePlotRegionCount: i32 = 0;
+let workPlotRegionCount: i32 = 0;
 let carX = new StaticArray<f32>(0);
 let carY = new StaticArray<f32>(0);
 let carSpeed = new StaticArray<f32>(0);
@@ -47,6 +96,17 @@ let carTargetY = new StaticArray<u16>(0);
 let carNextTargetX = new StaticArray<u16>(0);
 let carNextTargetY = new StaticArray<u16>(0);
 let carDirection = new StaticArray<u8>(0);
+let carLane = new StaticArray<u8>(0);
+let carActive = new StaticArray<u8>(0);
+let driverHome = new StaticArray<u32>(0);
+let driverWork = new StaticArray<u32>(0);
+let driverHomeRegion = new StaticArray<u8>(0);
+let driverWorkRegion = new StaticArray<u8>(0);
+let driverSchedule = new StaticArray<u8>(0);
+let driverDepartureOffset = new StaticArray<u8>(0);
+let driverCommuteDistance = new StaticArray<u16>(0);
+let driverState = new StaticArray<u8>(0);
+let driverPendingDeparture = new StaticArray<u8>(0);
 let carActualSpeed = new StaticArray<f32>(0);
 let carSegment = new StaticArray<u32>(0);
 let carProgress = new StaticArray<f32>(0);
@@ -71,6 +131,12 @@ let bucketHead = new StaticArray<i32>(0);
 let bucketNext = new StaticArray<i32>(0);
 let touchedBuckets = new StaticArray<u32>(0);
 let touchedBucketCount: i32 = 0;
+let laneChangeClaim = new StaticArray<u8>(0);
+let touchedLaneChangeClaims = new StaticArray<u32>(0);
+let touchedLaneChangeClaimCount: i32 = 0;
+let departureClaim = new StaticArray<u8>(0);
+let touchedDepartureClaims = new StaticArray<u32>(0);
+let touchedDepartureClaimCount: i32 = 0;
 
 let junctionOwner = new StaticArray<i32>(0);
 let junctionTouched = new StaticArray<u8>(0);
@@ -78,6 +144,15 @@ let junctionMovementMask = new StaticArray<u16>(0);
 let junctionCandidateNext = new StaticArray<i32>(0);
 let touchedJunctions = new StaticArray<u32>(0);
 let touchedJunctionCount: i32 = 0;
+let junctionStepDemand = new StaticArray<u8>(0);
+let junctionPeakDemand = new StaticArray<u16>(0);
+let junctionPressureScore = new StaticArray<u32>(0);
+let junctionPressureTracked = new StaticArray<u8>(0);
+let junctionDemandTouched = new StaticArray<u32>(0);
+let junctionDemandTouchedCount: i32 = 0;
+let pressureJunctions = new StaticArray<u32>(0);
+let pressureJunctionCount: i32 = 0;
+let upgradedJunction = new StaticArray<u8>(0);
 let junctionCandidateCount: i32 = 0;
 let junctionGrantCount: i32 = 0;
 let downstreamBlockedCount: i32 = 0;
@@ -223,6 +298,20 @@ function connectTiles(tile: i32, neighbor: i32, direction: u8): void {
   else opposite = EAST;
   unchecked((roadTiles[tile] = unchecked(roadTiles[tile]) | direction));
   unchecked((roadTiles[neighbor] = unchecked(roadTiles[neighbor]) | opposite));
+}
+
+function disconnectTiles(tile: i32, neighbor: i32, direction: u8): void {
+  let opposite: u8 = NORTH;
+  if (direction == NORTH) opposite = SOUTH;
+  else if (direction == EAST) opposite = WEST;
+  else if (direction == SOUTH) opposite = NORTH;
+  else opposite = EAST;
+  unchecked((
+    roadTiles[tile] = unchecked(roadTiles[tile]) & <u8>~direction
+  ));
+  unchecked((
+    roadTiles[neighbor] = unchecked(roadTiles[neighbor]) & <u8>~opposite
+  ));
 }
 
 function findAreaHub(
@@ -434,6 +523,67 @@ function generateRoadNetwork(seed: u32): void {
     }
   }
   growAreaNetwork(seed, buildable, 0, 0, GRID_SIZE, GRID_SIZE, 0);
+  markFourLaneArterials();
+}
+
+function markArterialRun(start: i32, length: i32, stride: i32): void {
+  if (length < MINIMUM_ARTERIAL_RUN) return;
+  const first = ARTERIAL_TRANSITION_BUFFER;
+  const last = length - ARTERIAL_TRANSITION_BUFFER;
+  for (let offset = first; offset < last; offset += 1) {
+    const tile = start + offset * stride;
+    unchecked((roadTiles[tile] = unchecked(roadTiles[tile]) | FOUR_LANE));
+  }
+}
+
+function markFourLaneArterials(): void {
+  const horizontal = EAST | WEST;
+  const vertical = NORTH | SOUTH;
+
+  for (let y = 0; y < GRID_SIZE; y += 1) {
+    let runStart = 0;
+    let runLength = 0;
+    for (let x = 0; x <= GRID_SIZE; x += 1) {
+      const tile = y * GRID_SIZE + x;
+      if (
+        x < GRID_SIZE &&
+        (unchecked(roadTiles[tile]) & ROAD_MASK) == horizontal
+      ) {
+        if (runLength == 0) runStart = tile;
+        runLength += 1;
+      } else {
+        markArterialRun(runStart, runLength, 1);
+        runLength = 0;
+      }
+    }
+  }
+
+  for (let x = 0; x < GRID_SIZE; x += 1) {
+    let runStart = 0;
+    let runLength = 0;
+    for (let y = 0; y <= GRID_SIZE; y += 1) {
+      const tile = y * GRID_SIZE + x;
+      if (
+        y < GRID_SIZE &&
+        (unchecked(roadTiles[tile]) & ROAD_MASK) == vertical
+      ) {
+        if (runLength == 0) runStart = tile;
+        runLength += 1;
+      } else {
+        markArterialRun(runStart, runLength, GRID_SIZE);
+        runLength = 0;
+      }
+    }
+  }
+}
+
+function refreshFourLaneArterials(): void {
+  for (let tile = 0; tile < TILE_COUNT; tile += 1) {
+    unchecked((
+      roadTiles[tile] = unchecked(roadTiles[tile]) & <u8>~FOUR_LANE
+    ));
+  }
+  markFourLaneArterials();
 }
 
 function addRoutingNeighbor(
@@ -579,6 +729,10 @@ function addRegionalRouteNeighbor(
     unchecked(visited[<i32>neighbor]) == <u16>(region + 1)
   ) return tail;
   unchecked((visited[<i32>neighbor] = <u16>(region + 1)));
+  unchecked((
+    regionalDistance[<i32>neighbor] =
+      unchecked(regionalDistance[<i32>current]) + 1
+  ));
   setRegionalDirection(region, neighbor, directionTowardCurrent);
   unchecked((queue[tail] = neighbor));
   return tail + 1;
@@ -591,6 +745,10 @@ function buildRegionalRoutes(): void {
       TILE_COUNT * REGION_ROUTE_STRIDE,
     );
     regionalVisited = new StaticArray<u16>(TILE_COUNT);
+    regionalDistance = new StaticArray<u16>(TILE_COUNT);
+    regionalHubDistances = new StaticArray<u16>(
+      REGION_COUNT * REGION_COUNT,
+    );
   }
   const queue = routingQueue;
   const visited = regionalVisited;
@@ -604,11 +762,16 @@ function buildRegionalRoutes(): void {
       region / REGION_AXIS,
     );
     unchecked((regionalHubs[region] = hub));
+  }
+
+  for (let region = 0; region < REGION_COUNT; region += 1) {
+    const hub = unchecked(regionalHubs[region]);
     if (hub == NO_TILE) continue;
     let head = 0;
     let tail = 1;
     unchecked((queue[0] = hub));
     unchecked((visited[<i32>hub] = <u16>(region + 1)));
+    unchecked((regionalDistance[<i32>hub] = 0));
 
     while (head < tail) {
       const current = unchecked(queue[head++]);
@@ -657,6 +820,35 @@ function buildRegionalRoutes(): void {
           tail,
         );
       }
+    }
+
+    for (let originRegion = 0; originRegion < REGION_COUNT; originRegion += 1) {
+      const originHub = unchecked(regionalHubs[originRegion]);
+      if (originHub == NO_TILE) continue;
+      unchecked((
+        regionalHubDistances[originRegion * REGION_COUNT + region] =
+          unchecked(regionalDistance[<i32>originHub])
+      ));
+    }
+  }
+}
+
+function markActivityPlots(): void {
+  homePlotRegions = new StaticArray<u8>(REGION_COUNT);
+  workPlotRegions = new StaticArray<u8>(REGION_COUNT);
+  homePlotRegionCount = 0;
+  workPlotRegionCount = 0;
+  for (let region = 0; region < REGION_COUNT; region += 1) {
+    const hub = unchecked(regionalHubs[region]);
+    if (hub == NO_TILE) continue;
+    const plotType = (region & 1) == 0 ? HOME_PLOT : WORK_PLOT;
+    unchecked((
+      roadTiles[<i32>hub] = unchecked(roadTiles[<i32>hub]) | plotType
+    ));
+    if (plotType == HOME_PLOT) {
+      unchecked((homePlotRegions[homePlotRegionCount++] = <u8>region));
+    } else {
+      unchecked((workPlotRegions[workPlotRegionCount++] = <u8>region));
     }
   }
 }
@@ -931,6 +1123,14 @@ function selectDirection(index: i32): void {
     x == <i32>unchecked(carTargetX[index]) &&
     y == <i32>unchecked(carTargetY[index])
   ) {
+    const state = unchecked(driverState[index]);
+    if (
+      unchecked(carActive[index]) != 0 &&
+      (state == DRIVER_TO_WORK || state == DRIVER_TO_HOME)
+    ) {
+      completeCommute(index);
+      return;
+    }
     advanceTarget(index);
   }
 
@@ -953,8 +1153,10 @@ function directionIndex(direction: u8): i32 {
   return 3;
 }
 
-function segmentKey(tile: u32, direction: u8): i32 {
-  return <i32>tile * 4 + directionIndex(direction);
+function segmentKey(tile: u32, direction: u8, lane: u8): i32 {
+  return (
+    <i32>tile * 4 + directionIndex(direction)
+  ) * LANES_PER_DIRECTION + <i32>lane;
 }
 
 function nextTileIndex(tile: u32, direction: u8): u32 {
@@ -1002,6 +1204,9 @@ function advanceCar(index: i32, distance: f32): void {
     );
     unchecked((carSegment[index] = destination));
     unchecked((carProgress[index] = 0.0));
+    if ((unchecked(roadTiles[<i32>destination]) & FOUR_LANE) == 0) {
+      unchecked((carLane[index] = 0));
+    }
     unchecked((
       carX[index] = <f32>(destination % <u32>GRID_SIZE) + 0.5
     ));
@@ -1009,6 +1214,7 @@ function advanceCar(index: i32, distance: f32): void {
       carY[index] = <f32>(destination / <u32>GRID_SIZE) + 0.5
     ));
     selectDirection(index);
+    if (unchecked(carActive[index]) == 0) return;
   }
 }
 
@@ -1022,9 +1228,11 @@ function clearLaneBuckets(): void {
 function buildLaneBuckets(): void {
   clearLaneBuckets();
   for (let index = 0; index < carCount; index += 1) {
+    if (unchecked(carActive[index]) == 0) continue;
     const key = segmentKey(
       unchecked(carSegment[index]),
       unchecked(carDirection[index]),
+      unchecked(carLane[index]),
     );
     const previous = unchecked(bucketHead[key]);
     if (previous == -1) {
@@ -1059,14 +1267,21 @@ function scanLaneBucket(
   return best;
 }
 
-function findLeaderDistance(index: i32): f32 {
+function laneForTile(tile: u32, requestedLane: u8): u8 {
+  return (
+    requestedLane == 1 &&
+    (unchecked(roadTiles[<i32>tile]) & FOUR_LANE) != 0
+  ) ? 1 : 0;
+}
+
+function findLeaderDistanceInLane(index: i32, requestedLane: u8): f32 {
   const segment = unchecked(carSegment[index]);
   const direction = unchecked(carDirection[index]);
   const progress = unchecked(carProgress[index]);
   let best: f32 = 1_000.0;
 
   best = scanLaneBucket(
-    segmentKey(segment, direction),
+    segmentKey(segment, direction, laneForTile(segment, requestedLane)),
     index,
     progress,
     0.0,
@@ -1099,7 +1314,11 @@ function findLeaderDistance(index: i32): f32 {
       predictedDirection,
     );
     best = scanLaneBucket(
-      segmentKey(tile, predictedDirection),
+      segmentKey(
+        tile,
+        predictedDirection,
+        laneForTile(tile, requestedLane),
+      ),
       index,
       0.0,
       distance,
@@ -1109,6 +1328,120 @@ function findLeaderDistance(index: i32): f32 {
     distance += 1.0;
   }
   return best;
+}
+
+function findFollowerDistanceInLane(index: i32, requestedLane: u8): f32 {
+  const segment = unchecked(carSegment[index]);
+  const direction = unchecked(carDirection[index]);
+  const progress = unchecked(carProgress[index]);
+  const lane = laneForTile(segment, requestedLane);
+  let best: f32 = 1_000.0;
+  let candidate = unchecked(bucketHead[segmentKey(segment, direction, lane)]);
+
+  while (candidate != -1) {
+    if (
+      candidate != index &&
+      unchecked(carProgress[candidate]) <= progress + 0.000_1
+    ) {
+      const distance = progress - unchecked(carProgress[candidate]);
+      if (distance < best) best = distance;
+    }
+    candidate = unchecked(bucketNext[candidate]);
+  }
+
+  const previous = nextTileIndex(segment, oppositeDirection(direction));
+  if ((unchecked(roadTiles[<i32>previous]) & FOUR_LANE) == 0) return best;
+  candidate = unchecked(bucketHead[segmentKey(previous, direction, lane)]);
+  while (candidate != -1) {
+    const distance =
+      progress + 1.0 - unchecked(carProgress[candidate]);
+    if (distance < best) best = distance;
+    candidate = unchecked(bucketNext[candidate]);
+  }
+  return best;
+}
+
+function distanceToFourLaneEnd(index: i32): f32 {
+  let tile = unchecked(carSegment[index]);
+  if ((unchecked(roadTiles[<i32>tile]) & FOUR_LANE) == 0) return 0.0;
+  const direction = unchecked(carDirection[index]);
+  let distance: f32 = 1.0 - unchecked(carProgress[index]);
+  for (let lookAhead = 0; lookAhead < 4; lookAhead += 1) {
+    tile = nextTileIndex(tile, direction);
+    if ((unchecked(roadTiles[<i32>tile]) & FOUR_LANE) == 0) break;
+    distance += 1.0;
+  }
+  return distance;
+}
+
+function clearLaneChangeClaims(): void {
+  for (let index = 0; index < touchedLaneChangeClaimCount; index += 1) {
+    unchecked((
+      laneChangeClaim[<i32>unchecked(touchedLaneChangeClaims[index])] = 0
+    ));
+  }
+  touchedLaneChangeClaimCount = 0;
+}
+
+function claimLaneChange(index: i32): bool {
+  const key =
+    <i32>unchecked(carSegment[index]) * 4 +
+    directionIndex(unchecked(carDirection[index]));
+  if (unchecked(laneChangeClaim[key]) != 0) return false;
+  unchecked((laneChangeClaim[key] = 1));
+  unchecked((touchedLaneChangeClaims[touchedLaneChangeClaimCount] = <u32>key));
+  touchedLaneChangeClaimCount += 1;
+  return true;
+}
+
+function updateTravelLanes(): bool {
+  clearLaneChangeClaims();
+  let changed = false;
+
+  for (let index = 0; index < carCount; index += 1) {
+    if (unchecked(carActive[index]) == 0) continue;
+    const segment = unchecked(carSegment[index]);
+    const currentLane = unchecked(carLane[index]);
+    const onFourLane =
+      (unchecked(roadTiles[<i32>segment]) & FOUR_LANE) != 0;
+    if (!onFourLane) {
+      if (currentLane != 0) {
+        unchecked((carLane[index] = 0));
+        changed = true;
+      }
+      continue;
+    }
+
+    const slowLeader = findLeaderDistanceInLane(index, 0);
+    const laneEnd = distanceToFourLaneEnd(index);
+    let targetLane = currentLane;
+    if (currentLane == 0) {
+      const passingLeader = findLeaderDistanceInLane(index, 1);
+      const passingFollower = findFollowerDistanceInLane(index, 1);
+      if (
+        slowLeader < OVERTAKE_TRIGGER_DISTANCE &&
+        passingLeader >= LANE_CHANGE_FRONT_CLEARANCE &&
+        passingFollower >= LANE_CHANGE_REAR_CLEARANCE &&
+        laneEnd >= LANE_END_LOOKAHEAD
+      ) targetLane = 1;
+    } else {
+      const slowFollower = findFollowerDistanceInLane(index, 0);
+      const normalMerge =
+        slowLeader >= LANE_CHANGE_FRONT_CLEARANCE &&
+        slowFollower >= LANE_CHANGE_REAR_CLEARANCE;
+      const urgentMerge =
+        laneEnd < LANE_END_LOOKAHEAD &&
+        slowLeader >= URGENT_MERGE_CLEARANCE &&
+        slowFollower >= URGENT_MERGE_CLEARANCE;
+      if (normalMerge || urgentMerge) targetLane = 0;
+    }
+
+    if (targetLane != currentLane && claimLaneChange(index)) {
+      unchecked((carLane[index] = targetLane));
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 function requiresReservation(tile: u32): bool {
@@ -1207,7 +1540,7 @@ function downstreamLeaderDistance(
 
   for (let lookAhead = 0; lookAhead < 4; lookAhead += 1) {
     best = scanLaneBucket(
-      segmentKey(tile, direction),
+      segmentKey(tile, direction, 0),
       index,
       0.0,
       distance,
@@ -1416,10 +1749,51 @@ function touchJunction(tile: u32): void {
   }
 }
 
+function beginJunctionDemandSample(): void {
+  for (let index = 0; index < junctionDemandTouchedCount; index += 1) {
+    unchecked((
+      junctionStepDemand[<i32>unchecked(junctionDemandTouched[index])] = 0
+    ));
+  }
+  junctionDemandTouchedCount = 0;
+}
+
+function recordJunctionDemand(tile: u32): void {
+  const tileIndex = <i32>tile;
+  let demand = unchecked(junctionStepDemand[tileIndex]);
+  if (demand == 0) {
+    unchecked((junctionDemandTouched[junctionDemandTouchedCount] = tile));
+    junctionDemandTouchedCount += 1;
+    if (unchecked(junctionPressureTracked[tileIndex]) == 0) {
+      unchecked((junctionPressureTracked[tileIndex] = 1));
+      unchecked((pressureJunctions[pressureJunctionCount] = tile));
+      pressureJunctionCount += 1;
+    }
+  }
+  if (demand < 255) demand += 1;
+  unchecked((junctionStepDemand[tileIndex] = demand));
+  if (<u16>demand > unchecked(junctionPeakDemand[tileIndex])) {
+    unchecked((junctionPeakDemand[tileIndex] = <u16>demand));
+    if (<i32>demand > busiestJunctionPeak) {
+      busiestJunctionPeak = <i32>demand;
+    }
+  }
+  const pressure = unchecked(junctionPressureScore[tileIndex]);
+  const added = <u32>demand * <u32>demand;
+  unchecked((
+    junctionPressureScore[tileIndex] =
+      pressure > 0xffff_ffff - added ? 0xffff_ffff : pressure + added
+  ));
+}
+
 function computeProposedDistances(deltaSeconds: f32): void {
   for (let index = 0; index < carCount; index += 1) {
+    if (unchecked(carActive[index]) == 0) continue;
     const desiredSpeed = unchecked(carSpeed[index]);
-    const leaderDistance = findLeaderDistance(index);
+    const leaderDistance = findLeaderDistanceInLane(
+      index,
+      unchecked(carLane[index]),
+    );
     const availableGap = Mathf.max(
       0.0,
       leaderDistance - VEHICLE_LENGTH - MINIMUM_GAP - COLLISION_PADDING,
@@ -1454,11 +1828,13 @@ function computeProposedDistances(deltaSeconds: f32): void {
 
 function reserveJunctions(): void {
   clearJunctionReservations();
+  beginJunctionDemandSample();
   junctionCandidateCount = 0;
   junctionGrantCount = 0;
   downstreamBlockedCount = 0;
 
   for (let index = 0; index < carCount; index += 1) {
+    if (unchecked(carActive[index]) == 0) continue;
     unchecked((carPendingMovement[index] = NO_MOVEMENT));
     unchecked((carPendingReservationLength[index] = 0));
     const tile = unchecked(carSegment[index]);
@@ -1491,6 +1867,7 @@ function reserveJunctions(): void {
   }
 
   for (let index = 0; index < carCount; index += 1) {
+    if (unchecked(carActive[index]) == 0) continue;
     const destination = nextTileIndex(
       unchecked(carSegment[index]),
       unchecked(carDirection[index]),
@@ -1521,6 +1898,7 @@ function reserveJunctions(): void {
     const movement = unchecked(carPendingReservationMovements[firstSlot]);
     unchecked((carPendingMovement[index] = movement));
     junctionCandidateCount += 1;
+    recordJunctionDemand(destination);
     if (!pendingReservationHasDownstreamSpace(index)) {
       downstreamBlockedCount += 1;
       continue;
@@ -1578,17 +1956,40 @@ function reserveJunctions(): void {
   }
 }
 
-function applyTrafficStep(deltaSeconds: f32): void {
+function applyTrafficStep(
+  deltaSeconds: f32,
+  previousClock: f32,
+  currentClock: f32,
+): void {
   buildLaneBuckets();
+  if (updateDriverSchedules(previousClock, currentClock)) buildLaneBuckets();
+  if (updateTravelLanes()) buildLaneBuckets();
   computeProposedDistances(deltaSeconds);
   reserveJunctions();
 
   for (let index = 0; index < carCount; index += 1) {
+    if (unchecked(carActive[index]) == 0) continue;
     const destination = nextTileIndex(
       unchecked(carSegment[index]),
       unchecked(carDirection[index]),
     );
     let proposedDistance = unchecked(carProposedDistance[index]);
+
+    if (
+      unchecked(carLane[index]) == 1 &&
+      (unchecked(roadTiles[<i32>destination]) & FOUR_LANE) == 0
+    ) {
+      const distanceToMergeLine: f32 =
+        1.0 - unchecked(carProgress[index]) - STOP_LINE_DISTANCE;
+      if (proposedDistance >= distanceToMergeLine) {
+        proposedDistance = Mathf.max(0.0, distanceToMergeLine);
+        unchecked((
+          carActualSpeed[index] = deltaSeconds > 0.0
+            ? proposedDistance / deltaSeconds
+            : 0.0
+        ));
+      }
+    }
 
     if (requiresReservation(destination)) {
       const distanceToStopLine: f32 =
@@ -1624,39 +2025,454 @@ function applyTrafficStep(deltaSeconds: f32): void {
   }
 }
 
-function spawnCar(index: i32): void {
-  while (true) {
-    const tile = randomRoadTile();
-    if (unchecked(junctionOwner[<i32>tile]) != -1) continue;
-    const x = <u16>(tile % <u32>GRID_SIZE);
-    const y = <u16>(tile / <u32>GRID_SIZE);
-
-    unchecked((carX[index] = <f32>x + 0.5));
-    unchecked((carY[index] = <f32>y + 0.5));
-    unchecked((carSegment[index] = tile));
-    unchecked((carProgress[index] = 0.0));
-    unchecked((carDirection[index] = 0));
-    unchecked((carWaitTicks[index] = 0));
-    unchecked((carJunctionGranted[index] = 0));
-    unchecked((carJunctionMovement[index] = NO_MOVEMENT));
-    unchecked((carPendingMovement[index] = NO_MOVEMENT));
-    unchecked((carReservedJunction[index] = NO_TILE));
-    unchecked((carReservationLength[index] = 0));
-    unchecked((carPendingReservationLength[index] = 0));
-    unchecked((carReservationExitTile[index] = NO_TILE));
-    unchecked((carPendingReservationExitTile[index] = NO_TILE));
-    chooseNewTarget(index);
-    chooseQueuedTarget(index);
-    selectDirection(index);
-    unchecked((junctionOwner[<i32>tile] = index));
-    touchJunction(tile);
-    break;
+function roundaboutNewTileCount(center: i32): i32 {
+  const north = center - GRID_SIZE;
+  const south = center + GRID_SIZE;
+  const ring = [
+    north,
+    north - 1,
+    north + 1,
+    center + 1,
+    south,
+    south - 1,
+    south + 1,
+    center - 1,
+  ];
+  let count = 0;
+  for (let index = 0; index < 8; index += 1) {
+    if (
+      (unchecked(roadTiles[unchecked(ring[index])]) & ROAD_MASK) == 0
+    ) count += 1;
   }
+  return count;
+}
 
-  const desiredSpeed: f32 = 2.0 + randomUnit() * 6.0;
-  unchecked((carSpeed[index] = desiredSpeed));
-  unchecked((carActualSpeed[index] = desiredSpeed));
+function roundaboutSiteIsEligible(center: i32): bool {
+  if (center < 0 || center >= TILE_COUNT) return false;
+  const x = center % GRID_SIZE;
+  const y = center / GRID_SIZE;
+  if (x <= 0 || x >= GRID_SIZE - 1 || y <= 0 || y >= GRID_SIZE - 1) {
+    return false;
+  }
+  const centerData = unchecked(roadTiles[center]);
+  if (
+    roadDegreeMask(centerData & ROAD_MASK) < 3 ||
+    (centerData & (HOME_PLOT | WORK_PLOT)) != 0 ||
+    unchecked(upgradedJunction[center]) != 0
+  ) return false;
+
+  const north = center - GRID_SIZE;
+  const south = center + GRID_SIZE;
+  const ring = [
+    north,
+    north - 1,
+    north + 1,
+    center + 1,
+    south,
+    south - 1,
+    south + 1,
+    center - 1,
+  ];
+  for (let index = 0; index < 8; index += 1) {
+    const data = unchecked(roadTiles[unchecked(ring[index])]);
+    if (
+      (data & BUILDABLE) == 0 ||
+      (data & (HOME_PLOT | WORK_PLOT)) != 0
+    ) return false;
+  }
+  return true;
+}
+
+function roundaboutCenterIsClear(center: i32): bool {
+  for (let direction = 0; direction < 4; direction += 1) {
+    for (let lane = 0; lane < LANES_PER_DIRECTION; lane += 1) {
+      if (
+        unchecked(bucketHead[
+          (center * 4 + direction) * LANES_PER_DIRECTION + lane
+        ]) != -1
+      ) return false;
+    }
+  }
+  return true;
+}
+
+function refreshDriverCommuteDistances(): void {
+  for (let index = 0; index < carCapacity; index += 1) {
+    const homeRegion = <i32>unchecked(driverHomeRegion[index]);
+    const workRegion = <i32>unchecked(driverWorkRegion[index]);
+    unchecked((
+      driverCommuteDistance[index] = unchecked(regionalHubDistances[
+        homeRegion * REGION_COUNT + workRegion
+      ])
+    ));
+  }
+}
+
+function refreshRoutesAfterRoadChange(): void {
+  refreshFourLaneArterials();
+  buildRoutingTree();
+  buildRegionalRoutes();
+  refreshDriverCommuteDistances();
+  clearJunctionReservations();
+  for (let index = 0; index < carCount; index += 1) {
+    if (unchecked(carActive[index]) != 0) selectDirection(index);
+  }
+  buildLaneBuckets();
+}
+
+function performRoundaboutUpgrade(center: i32): bool {
+  if (
+    !dynamicRoadsEnabled ||
+    !roundaboutSiteIsEligible(center) ||
+    !roundaboutCenterIsClear(center)
+  ) return false;
+  const newTiles = roundaboutNewTileCount(center);
+  if (
+    roadConstructionTileCount + newTiles > MAX_DYNAMIC_ROAD_TILES
+  ) return false;
+
+  const north = center - GRID_SIZE;
+  const east = center + 1;
+  const south = center + GRID_SIZE;
+  const west = center - 1;
+  const northEast = north + 1;
+  const southEast = south + 1;
+  const southWest = south - 1;
+  const northWest = north - 1;
+
+  disconnectTiles(center, north, NORTH);
+  disconnectTiles(center, east, EAST);
+  disconnectTiles(center, south, SOUTH);
+  disconnectTiles(center, west, WEST);
+  connectTiles(north, northEast, EAST);
+  connectTiles(northEast, east, SOUTH);
+  connectTiles(east, southEast, SOUTH);
+  connectTiles(southEast, south, WEST);
+  connectTiles(south, southWest, WEST);
+  connectTiles(southWest, west, NORTH);
+  connectTiles(west, northWest, NORTH);
+  connectTiles(northWest, north, EAST);
+  unchecked((
+    roadTiles[center] =
+      unchecked(roadTiles[center]) & <u8>~(ROAD_MASK | FOUR_LANE)
+  ));
+  unchecked((upgradedJunction[center] = 1));
+  roadConstructionTileCount += newTiles;
+  roadUpgradeCount += 1;
+  roadRevision += 1;
+  refreshRoutesAfterRoadChange();
+  return true;
+}
+
+function adaptRoadNetwork(): bool {
+  if (
+    !dynamicRoadsEnabled ||
+    roadConstructionTileCount >= MAX_DYNAMIC_ROAD_TILES
+  ) return false;
+  let bestTile = -1;
+  let bestValue: f64 = 0.0;
+  for (let index = 0; index < pressureJunctionCount; index += 1) {
+    const tile = <i32>unchecked(pressureJunctions[index]);
+    const peak = <i32>unchecked(junctionPeakDemand[tile]);
+    if (
+      peak < MINIMUM_JUNCTION_PEAK_DEMAND ||
+      !roundaboutSiteIsEligible(tile) ||
+      !roundaboutCenterIsClear(tile)
+    ) continue;
+    const newTiles = roundaboutNewTileCount(tile);
+    if (
+      roadConstructionTileCount + newTiles > MAX_DYNAMIC_ROAD_TILES
+    ) continue;
+    const value =
+      <f64>unchecked(junctionPressureScore[tile]) * <f64>peak /
+      <f64>Math.max(1, newTiles);
+    if (value > bestValue) {
+      bestValue = value;
+      bestTile = tile;
+    }
+  }
+  for (let index = 0; index < pressureJunctionCount; index += 1) {
+    const tile = <i32>unchecked(pressureJunctions[index]);
+    unchecked((
+      junctionPressureScore[tile] =
+        unchecked(junctionPressureScore[tile]) / 2
+    ));
+  }
+  return bestTile >= 0 && performRoundaboutUpgrade(bestTile);
+}
+
+function wrapClock(minute: f32): f32 {
+  let wrapped = minute;
+  while (wrapped >= DAY_MINUTES) wrapped -= DAY_MINUTES;
+  while (wrapped < 0.0) wrapped += DAY_MINUTES;
+  return wrapped;
+}
+
+function scheduleStartMinute(schedule: u8): f32 {
+  if (schedule == SCHEDULE_DAY) return 540.0;
+  if (schedule == SCHEDULE_EVENING) return 1_020.0;
+  return 60.0;
+}
+
+function scheduleEndMinute(schedule: u8): f32 {
+  if (schedule == SCHEDULE_DAY) return 1_020.0;
+  if (schedule == SCHEDULE_EVENING) return 60.0;
+  return 540.0;
+}
+
+function isWithinShift(minute: f32, schedule: u8): bool {
+  const start = scheduleStartMinute(schedule);
+  const end = scheduleEndMinute(schedule);
+  if (start < end) return minute >= start && minute < end;
+  return minute >= start || minute < end;
+}
+
+function crossedClockMinute(
+  previous: f32,
+  current: f32,
+  target: f32,
+): bool {
+  const event = wrapClock(target);
+  if (previous <= current) {
+    return event > previous && event <= current;
+  }
+  return event > previous || event <= current;
+}
+
+function setParkedPosition(index: i32, tile: u32): void {
+  unchecked((carSegment[index] = tile));
+  unchecked((carProgress[index] = 0.0));
+  unchecked((carX[index] = <f32>(tile % <u32>GRID_SIZE) + 0.5));
+  unchecked((carY[index] = <f32>(tile / <u32>GRID_SIZE) + 0.5));
+  unchecked((carDirection[index] = 0));
+  unchecked((carLane[index] = 0));
+  unchecked((carActive[index] = 0));
+  unchecked((carActualSpeed[index] = 0.0));
   unchecked((carProposedDistance[index] = 0.0));
+  unchecked((carWaitTicks[index] = 0));
+  unchecked((carJunctionGranted[index] = 0));
+  unchecked((carJunctionMovement[index] = NO_MOVEMENT));
+  unchecked((carPendingMovement[index] = NO_MOVEMENT));
+  unchecked((carReservedJunction[index] = NO_TILE));
+  unchecked((carReservationLength[index] = 0));
+  unchecked((carPendingReservationLength[index] = 0));
+  unchecked((carReservationExitTile[index] = NO_TILE));
+  unchecked((carPendingReservationExitTile[index] = NO_TILE));
+}
+
+function resetDriverForCurrentTime(index: i32): void {
+  const schedule = unchecked(driverSchedule[index]);
+  const atWork = isWithinShift(clockMinutes, schedule);
+  const state = atWork ? DRIVER_AT_WORK : DRIVER_AT_HOME;
+  const target = atWork
+    ? unchecked(driverHome[index])
+    : unchecked(driverWork[index]);
+  const targetRegion = atWork
+    ? unchecked(driverHomeRegion[index])
+    : unchecked(driverWorkRegion[index]);
+  unchecked((driverState[index] = state));
+  unchecked((driverPendingDeparture[index] = DEPARTURE_NONE));
+  unchecked((carTargetRegion[index] = targetRegion));
+  unchecked((carNextTargetRegion[index] = targetRegion));
+  unchecked((carTargetX[index] = <u16>(target % <u32>GRID_SIZE)));
+  unchecked((carTargetY[index] = <u16>(target / <u32>GRID_SIZE)));
+  unchecked((carNextTargetX[index] = unchecked(carTargetX[index])));
+  unchecked((carNextTargetY[index] = unchecked(carTargetY[index])));
+  setParkedPosition(
+    index,
+    atWork ? unchecked(driverWork[index]) : unchecked(driverHome[index]),
+  );
+}
+
+function chooseWorkPlotRegion(homeRegion: i32): i32 {
+  let nearestRegion = <i32>unchecked(workPlotRegions[0]);
+  let nearestDistance = 65_535;
+  for (let attempt = 0; attempt < workPlotRegionCount; attempt += 1) {
+    const workRegion = <i32>unchecked(workPlotRegions[attempt]);
+    const distance = <i32>unchecked(regionalHubDistances[
+      homeRegion * REGION_COUNT + workRegion
+    ]);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestRegion = workRegion;
+    }
+  }
+  return nearestRegion;
+}
+
+function initializeDriver(index: i32): void {
+  const homeRegion = <i32>unchecked(homePlotRegions[
+    <i32>(nextRandom() % <u32>homePlotRegionCount)
+  ]);
+  const workRegion = chooseWorkPlotRegion(homeRegion);
+  const scheduleRoll = <i32>(nextRandom() % 100);
+  const schedule: u8 = scheduleRoll < 80
+    ? SCHEDULE_DAY
+    : scheduleRoll < 90
+      ? SCHEDULE_EVENING
+      : SCHEDULE_NIGHT;
+
+  unchecked((driverHomeRegion[index] = <u8>homeRegion));
+  unchecked((driverWorkRegion[index] = <u8>workRegion));
+  unchecked((driverHome[index] = unchecked(regionalHubs[homeRegion])));
+  unchecked((driverWork[index] = unchecked(regionalHubs[workRegion])));
+  unchecked((
+    driverCommuteDistance[index] = unchecked(regionalHubDistances[
+      homeRegion * REGION_COUNT + workRegion
+    ])
+  ));
+  unchecked((driverSchedule[index] = schedule));
+  unchecked((
+    driverDepartureOffset[index] =
+      <u8>(nextRandom() % <u32>(WORK_ARRIVAL_BUFFER_MINUTES + 1))
+  ));
+  const desiredSpeed =
+    MIN_DESIRED_SPEED +
+    randomUnit() * (MAX_DESIRED_SPEED - MIN_DESIRED_SPEED);
+  unchecked((carSpeed[index] = desiredSpeed));
+  resetDriverForCurrentTime(index);
+}
+
+function clearDepartureClaims(): void {
+  for (let index = 0; index < touchedDepartureClaimCount; index += 1) {
+    unchecked((
+      departureClaim[<i32>unchecked(touchedDepartureClaims[index])] = 0
+    ));
+  }
+  touchedDepartureClaimCount = 0;
+}
+
+function departureLaneHasSpace(tile: u32, direction: u8): bool {
+  let candidate = unchecked(bucketHead[segmentKey(tile, direction, 0)]);
+  const required =
+    VEHICLE_LENGTH + MINIMUM_GAP + COLLISION_PADDING;
+  while (candidate != -1) {
+    if (unchecked(carProgress[candidate]) < required) return false;
+    candidate = unchecked(bucketNext[candidate]);
+  }
+  return true;
+}
+
+function tryBeginCommute(index: i32): bool {
+  const pending = unchecked(driverPendingDeparture[index]);
+  if (pending == DEPARTURE_NONE) return false;
+  const origin = unchecked(carSegment[index]);
+  const toWork = pending == DEPARTURE_TO_WORK;
+  const target = toWork
+    ? unchecked(driverWork[index])
+    : unchecked(driverHome[index]);
+  const targetRegion = toWork
+    ? unchecked(driverWorkRegion[index])
+    : unchecked(driverHomeRegion[index]);
+  unchecked((carTargetRegion[index] = targetRegion));
+  unchecked((carNextTargetRegion[index] = targetRegion));
+  unchecked((carTargetX[index] = <u16>(target % <u32>GRID_SIZE)));
+  unchecked((carTargetY[index] = <u16>(target / <u32>GRID_SIZE)));
+  unchecked((carNextTargetX[index] = unchecked(carTargetX[index])));
+  unchecked((carNextTargetY[index] = unchecked(carTargetY[index])));
+  unchecked((carDirection[index] = 0));
+  unchecked((carLane[index] = 0));
+  selectDirection(index);
+  const direction = unchecked(carDirection[index]);
+  const claimKey =
+    <i32>origin * 4 + directionIndex(direction);
+  if (
+    unchecked(departureClaim[claimKey]) != 0 ||
+    !departureLaneHasSpace(origin, direction)
+  ) return false;
+
+  unchecked((departureClaim[claimKey] = 1));
+  unchecked((
+    touchedDepartureClaims[touchedDepartureClaimCount] = <u32>claimKey
+  ));
+  touchedDepartureClaimCount += 1;
+  unchecked((driverState[index] = toWork ? DRIVER_TO_WORK : DRIVER_TO_HOME));
+  unchecked((driverPendingDeparture[index] = DEPARTURE_NONE));
+  unchecked((carActive[index] = 1));
+  unchecked((carActualSpeed[index] = unchecked(carSpeed[index])));
+
+  onRoadCarCount += 1;
+  if (toWork) driversAtHomeCount -= 1;
+  else driversAtWorkCount -= 1;
+  return true;
+}
+
+function completeCommute(index: i32): void {
+  const state = unchecked(driverState[index]);
+  if (state == DRIVER_TO_WORK) {
+    unchecked((driverState[index] = DRIVER_AT_WORK));
+    driversAtWorkCount += 1;
+  } else {
+    unchecked((driverState[index] = DRIVER_AT_HOME));
+    driversAtHomeCount += 1;
+  }
+  onRoadCarCount -= 1;
+  unchecked((carActive[index] = 0));
+  unchecked((carActualSpeed[index] = 0.0));
+  unchecked((carProposedDistance[index] = 0.0));
+  unchecked((carDirection[index] = 0));
+  unchecked((carLane[index] = 0));
+  clearCarReservation(index);
+}
+
+function estimatedCommuteMinutes(index: i32): f32 {
+  return (
+    <f32>unchecked(driverCommuteDistance[index]) /
+    unchecked(carSpeed[index])
+  ) * SIM_MINUTES_PER_SECOND;
+}
+
+function updateDriverSchedules(previous: f32, current: f32): bool {
+  clearDepartureClaims();
+  let activated = false;
+  for (let index = 0; index < carCount; index += 1) {
+    const state = unchecked(driverState[index]);
+    const schedule = unchecked(driverSchedule[index]);
+    const offset = <f32>unchecked(driverDepartureOffset[index]);
+    if (
+      state == DRIVER_AT_HOME &&
+      crossedClockMinute(
+        previous,
+        current,
+        scheduleStartMinute(schedule) -
+          estimatedCommuteMinutes(index) -
+          offset,
+      )
+    ) {
+      unchecked((driverPendingDeparture[index] = DEPARTURE_TO_WORK));
+    } else if (
+      state == DRIVER_AT_WORK &&
+      crossedClockMinute(
+        previous,
+        current,
+        scheduleEndMinute(schedule) + offset,
+      )
+    ) {
+      unchecked((driverPendingDeparture[index] = DEPARTURE_TO_HOME));
+    }
+    if (tryBeginCommute(index)) activated = true;
+  }
+  return activated;
+}
+
+function recountDriverLocations(): void {
+  onRoadCarCount = 0;
+  driversAtHomeCount = 0;
+  driversAtWorkCount = 0;
+  dynamicRoadsEnabled = true;
+  roadRevision = 0;
+  roadUpgradeCount = 0;
+  roadConstructionTileCount = 0;
+  busiestJunctionPeak = 0;
+  for (let index = 0; index < carCount; index += 1) {
+    if (unchecked(carActive[index]) != 0) {
+      onRoadCarCount += 1;
+    } else if (unchecked(driverState[index]) == DRIVER_AT_WORK) {
+      driversAtWorkCount += 1;
+    } else {
+      driversAtHomeCount += 1;
+    }
+  }
 }
 
 export function initialize(seed: u32, requestedCarCount: i32): void {
@@ -1668,10 +2484,15 @@ export function initialize(seed: u32, requestedCarCount: i32): void {
       : requestedCarCount;
   carCount = carCapacity;
   tick = 0;
+  clockMinutes = INITIAL_CLOCK_MINUTES;
+  onRoadCarCount = 0;
+  driversAtHomeCount = 0;
+  driversAtWorkCount = 0;
 
   generateRoadNetwork(randomState);
   buildRoutingTree();
   buildRegionalRoutes();
+  markActivityPlots();
   carX = new StaticArray<f32>(carCapacity);
   carY = new StaticArray<f32>(carCapacity);
   carSpeed = new StaticArray<f32>(carCapacity);
@@ -1680,6 +2501,17 @@ export function initialize(seed: u32, requestedCarCount: i32): void {
   carNextTargetX = new StaticArray<u16>(carCapacity);
   carNextTargetY = new StaticArray<u16>(carCapacity);
   carDirection = new StaticArray<u8>(carCapacity);
+  carLane = new StaticArray<u8>(carCapacity);
+  carActive = new StaticArray<u8>(carCapacity);
+  driverHome = new StaticArray<u32>(carCapacity);
+  driverWork = new StaticArray<u32>(carCapacity);
+  driverHomeRegion = new StaticArray<u8>(carCapacity);
+  driverWorkRegion = new StaticArray<u8>(carCapacity);
+  driverSchedule = new StaticArray<u8>(carCapacity);
+  driverDepartureOffset = new StaticArray<u8>(carCapacity);
+  driverCommuteDistance = new StaticArray<u16>(carCapacity);
+  driverState = new StaticArray<u8>(carCapacity);
+  driverPendingDeparture = new StaticArray<u8>(carCapacity);
   carActualSpeed = new StaticArray<f32>(carCapacity);
   carSegment = new StaticArray<u32>(carCapacity);
   carProgress = new StaticArray<f32>(carCapacity);
@@ -1715,6 +2547,12 @@ export function initialize(seed: u32, requestedCarCount: i32): void {
   for (let index = 0; index < SEGMENT_BUCKET_COUNT; index += 1) {
     unchecked((bucketHead[index] = -1));
   }
+  laneChangeClaim = new StaticArray<u8>(TILE_COUNT * 4);
+  touchedLaneChangeClaims = new StaticArray<u32>(carCapacity);
+  touchedLaneChangeClaimCount = 0;
+  departureClaim = new StaticArray<u8>(TILE_COUNT * 4);
+  touchedDepartureClaims = new StaticArray<u32>(carCapacity);
+  touchedDepartureClaimCount = 0;
 
   junctionOwner = new StaticArray<i32>(TILE_COUNT);
   junctionTouched = new StaticArray<u8>(TILE_COUNT);
@@ -1722,13 +2560,23 @@ export function initialize(seed: u32, requestedCarCount: i32): void {
   junctionCandidateNext = new StaticArray<i32>(carCapacity);
   touchedJunctions = new StaticArray<u32>(carCapacity);
   touchedJunctionCount = 0;
+  junctionStepDemand = new StaticArray<u8>(TILE_COUNT);
+  junctionPeakDemand = new StaticArray<u16>(TILE_COUNT);
+  junctionPressureScore = new StaticArray<u32>(TILE_COUNT);
+  junctionPressureTracked = new StaticArray<u8>(TILE_COUNT);
+  junctionDemandTouched = new StaticArray<u32>(carCapacity);
+  junctionDemandTouchedCount = 0;
+  pressureJunctions = new StaticArray<u32>(TILE_COUNT);
+  pressureJunctionCount = 0;
+  upgradedJunction = new StaticArray<u8>(TILE_COUNT);
   for (let index = 0; index < TILE_COUNT; index += 1) {
     unchecked((junctionOwner[index] = -1));
   }
 
-  for (let index = 0; index < carCount; index += 1) {
-    spawnCar(index);
+  for (let index = 0; index < carCapacity; index += 1) {
+    initializeDriver(index);
   }
+  recountDriverLocations();
   clearJunctionReservations();
 }
 
@@ -1736,10 +2584,21 @@ export function step(deltaSeconds: f32): void {
   let remaining = Mathf.max(0.0, Mathf.min(0.25, deltaSeconds));
   while (remaining > 0.0) {
     const substep = Mathf.min(1.0 / 30.0, remaining);
-    applyTrafficStep(substep);
+    const previousClock = clockMinutes;
+    clockMinutes = wrapClock(
+      clockMinutes + substep * SIM_MINUTES_PER_SECOND,
+    );
+    applyTrafficStep(substep, previousClock, clockMinutes);
     remaining -= substep;
   }
   tick += 1;
+  if (
+    dynamicRoadsEnabled &&
+    tick % ROAD_ADAPTATION_INTERVAL_TICKS == 0
+  ) {
+    buildLaneBuckets();
+    adaptRoadNetwork();
+  }
 }
 
 export function isRoad(x: i32, y: i32): i32 {
@@ -1793,25 +2652,89 @@ export function setActiveCarCount(requestedCarCount: i32): i32 {
 
   clearJunctionReservations();
   if (target > carCount) {
-    for (let index = 0; index < carCount; index += 1) {
-      const tile = unchecked(carSegment[index]);
-      const tileIndex = <i32>tile;
-      if (unchecked(junctionOwner[tileIndex]) == -1) {
-        unchecked((junctionOwner[tileIndex] = index));
-        touchJunction(tile);
-      }
-    }
     for (let index = carCount; index < target; index += 1) {
-      spawnCar(index);
+      resetDriverForCurrentTime(index);
     }
   }
   carCount = target;
+  recountDriverLocations();
   clearJunctionReservations();
   return carCount;
 }
 
 export function getTick(): i32 {
   return tick;
+}
+
+export function getDynamicRoadsEnabled(): i32 {
+  return dynamicRoadsEnabled ? 1 : 0;
+}
+
+export function setDynamicRoadsEnabled(enabled: i32): i32 {
+  dynamicRoadsEnabled = enabled != 0;
+  return dynamicRoadsEnabled ? 1 : 0;
+}
+
+export function requestRoadUpgrade(tile: i32): i32 {
+  buildLaneBuckets();
+  return performRoundaboutUpgrade(tile) ? 1 : 0;
+}
+
+export function getRoadRevision(): i32 {
+  return roadRevision;
+}
+
+export function getRoadUpgradeCount(): i32 {
+  return roadUpgradeCount;
+}
+
+export function getRoadConstructionTileCount(): i32 {
+  return roadConstructionTileCount;
+}
+
+export function getBusiestJunctionPeak(): i32 {
+  return busiestJunctionPeak;
+}
+
+export function getTileLengthMeters(): f32 {
+  return TILE_LENGTH_METERS;
+}
+
+export function getSimulationMinutesPerSecond(): f32 {
+  return SIM_MINUTES_PER_SECOND;
+}
+
+export function getMinimumDesiredSpeed(): f32 {
+  return MIN_DESIRED_SPEED;
+}
+
+export function getMaximumDesiredSpeed(): f32 {
+  return MAX_DESIRED_SPEED;
+}
+
+export function getMaximumCommuteTiles(): i32 {
+  return MAX_COMMUTE_TILES;
+}
+
+export function getClockMinutes(): f32 {
+  return clockMinutes;
+}
+
+export function setClockMinutes(requestedMinutes: f32): f32 {
+  clockMinutes = wrapClock(requestedMinutes);
+  return clockMinutes;
+}
+
+export function getOnRoadCarCount(): i32 {
+  return onRoadCarCount;
+}
+
+export function getDriversAtHomeCount(): i32 {
+  return driversAtHomeCount;
+}
+
+export function getDriversAtWorkCount(): i32 {
+  return driversAtWorkCount;
 }
 
 export function getJunctionCandidateCount(): i32 {
@@ -1832,6 +2755,10 @@ export function getCarReservationLengthPointer(): usize {
 
 export function getRoadTilePointer(): usize {
   return changetype<usize>(roadTiles);
+}
+
+export function getJunctionPeakDemandPointer(): usize {
+  return changetype<usize>(junctionPeakDemand);
 }
 
 export function getCarXPointer(): usize {
@@ -1856,6 +2783,34 @@ export function getCarTargetYPointer(): usize {
 
 export function getCarDirectionPointer(): usize {
   return changetype<usize>(carDirection);
+}
+
+export function getCarLanePointer(): usize {
+  return changetype<usize>(carLane);
+}
+
+export function getCarActivePointer(): usize {
+  return changetype<usize>(carActive);
+}
+
+export function getDriverHomePointer(): usize {
+  return changetype<usize>(driverHome);
+}
+
+export function getDriverWorkPointer(): usize {
+  return changetype<usize>(driverWork);
+}
+
+export function getDriverSchedulePointer(): usize {
+  return changetype<usize>(driverSchedule);
+}
+
+export function getDriverCommuteDistancePointer(): usize {
+  return changetype<usize>(driverCommuteDistance);
+}
+
+export function getDriverStatePointer(): usize {
+  return changetype<usize>(driverState);
 }
 
 export function getCarActualSpeedPointer(): usize {
