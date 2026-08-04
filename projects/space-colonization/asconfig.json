@@ -1,0 +1,18 @@
+{
+  "options": {
+    "exportRuntime": true,
+    "runtime": "stub",
+    "initialMemory": 128,
+    "maximumMemory": 1024,
+    "noAssert": false
+  },
+  "targets": {
+    "release": {
+      "outFile": "public/galaxy-core.wasm",
+      "textFile": "build/galaxy-core.wat",
+      "sourceMap": true,
+      "optimizeLevel": 3,
+      "shrinkLevel": 1
+    }
+  }
+}

@@ -2,10 +2,18 @@
   "name": "@wasmodeus/space-colonization",
   "private": true,
   "type": "module",
-  "description": "Space colonization simulation workspace (in progress).",
+  "description": "A deterministic WebGPU and WebAssembly Milky-Way-scale simulator.",
   "scripts": {
-    "build": "echo \"space-colonization simulation build is not yet implemented\"",
-    "dev": "echo \"space-colonization dev server is not yet implemented\"",
-    "test": "echo \"space-colonization tests are not yet implemented\""
+    "build": "npm run build:wasm && npm run build:web",
+    "build:wasm": "asc assembly/index.ts --config asconfig.json --target release",
+    "build:web": "esbuild src/main.js --bundle --format=esm --sourcemap --outfile=public/app.js --loader:.wgsl=text && esbuild src/simulation/galaxy-worker.js --bundle --format=esm --sourcemap --outfile=public/galaxy-worker.js",
+    "dev": "npm run build && python -m http.server 4174 --directory public",
+    "lint": "eslint .",
+    "typecheck": "tsc --project jsconfig.json",
+    "test": "node --test \"test/*.test.js\"",
+    "test:wasm": "npm run build:wasm && node --test \"test-wasm/*.test.js\"",
+    "test:full": "npm run test && npm run test:wasm",
+    "check": "npm run lint && npm run typecheck && npm run build:wasm && npm test",
+    "check:full": "npm run check && npm run test:wasm && npm run build:web"
   }
 }
