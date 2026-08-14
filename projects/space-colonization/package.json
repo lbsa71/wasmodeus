@@ -10,8 +10,8 @@
     "dev": "npm run build && python -m http.server 4174 --directory public",
     "lint": "eslint .",
     "typecheck": "tsc --project jsconfig.json",
-    "test": "node --test \"test/*.test.js\"",
-    "test:wasm": "npm run build:wasm && node --test \"test-wasm/*.test.js\"",
+    "test": "node --test test/*.test.js",
+    "test:wasm": "npm run build:wasm && node --test test-wasm/*.test.js",
     "test:full": "npm run test && npm run test:wasm",
     "check": "npm run lint && npm run typecheck && npm run build:wasm && npm test",
     "check:full": "npm run check && npm run test:wasm && npm run build:web"
