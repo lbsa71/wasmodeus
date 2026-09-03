@@ -1,0 +1,19 @@
+{
+  "name": "@wasmodeus/starship-puzzler",
+  "private": true,
+  "type": "module",
+  "description": "A controller-first WebAssembly and WebGPU spatial puzzle prototype.",
+  "scripts": {
+    "build": "npm run build:wasm && npm run build:web",
+    "build:wasm": "asc assembly/index.ts --config asconfig.json --target release",
+    "build:web": "esbuild src/main.js --bundle --format=esm --sourcemap --outfile=public/app.js --loader:.wgsl=text",
+    "dev": "npm run build && python -m http.server 4175 --directory public",
+    "lint": "eslint .",
+    "typecheck": "tsc --project jsconfig.json",
+    "test": "node --test \"test/*.test.js\"",
+    "test:wasm": "npm run build:wasm && node --test \"test-wasm/*.test.js\"",
+    "test:full": "npm test && npm run test:wasm",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build:wasm",
+    "check:full": "npm run check && npm run test:wasm && npm run build:web"
+  }
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#02050d">
+    <title>Starship Puzzler · Prototype 3</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main>
+      <canvas id="prototype" aria-label="Starship orbital movement prototype"></canvas>
+      <header>
+        <p class="eyebrow">STARSHIP PUZZLER / PROTOTYPE 3</p>
+        <h1>Keep the<br>fleet alive.</h1>
+        <p id="status">Loading deterministic orbital motion…</p>
+      </header>
+      <aside aria-label="Prototype telemetry">
+        <dl>
+          <div><dt>Renderer</dt><dd id="backend">starting</dd></div>
+          <div><dt>Route</dt><dd id="route">inner</dd></div>
+          <div><dt>Motion</dt><dd id="mode">captured</dd></div>
+          <div><dt>Speed</dt><dd id="speed">100.0 u/s</dd></div>
+          <div><dt>Enemy</dt><dd id="enemy">scanning</dd></div>
+          <div><dt>Fleet</dt><dd id="fleet">Scout · Laser</dd></div>
+          <div><dt>Laser</dt><dd id="laser">ready</dd></div>
+          <div><dt>Objective</dt><dd id="objective">clear the laser lane, then lure Red through it</dd></div>
+          <div><dt>Crashes</dt><dd id="crashes">0</dd></div>
+        </dl>
+      </aside>
+      <footer>
+        <p>Red fires at irregular intervals. Clear the lane with the Scout, switch to the Laser platform, then fire as Red crosses it.</p>
+        <p><strong>Stick ↑</strong> jump out · <strong>Stick ↓</strong> fall in · <strong>L1/R1</strong> switch ships · <strong>A / Space</strong> fire laser · <strong>R</strong> reset</p>
+      </footer>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

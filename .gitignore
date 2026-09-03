@@ -4,5 +4,7 @@ projects/*/public/app.js
 projects/*/public/app.js.map
 projects/*/public/simulation.wasm
 projects/*/public/simulation.wasm.map
-public/
-build/
+projects/*/public/*.wasm
+projects/*/public/*.wasm.map
+/public/
+/build/

@@ -2,7 +2,9 @@
 
 WASMODEUS is now organized as a multi-project workspace.
 `projects/traffic-simulator` contains the existing traffic project, and
-`projects/space-colonization` is a scaffold for your secondary simulation.
+`projects/space-colonization` contains the galaxy simulation. The
+`projects/starship-puzzler` workspace is a WebAssembly/WebGPU proof-of-fun
+prototype for deterministic orbital-route movement.
 
 Traffic version 1 remains a browser-based, WebGPU-first massive traffic
 simulator with a WebAssembly simulation core. Version 1 models a logical 1,000 ×
@@ -63,7 +65,9 @@ npm run build
 
 `npm run dev` and all `npm run test:*` commands execute against
 `projects/traffic-simulator` by default. Use `npm run build:traffic` or
-`npm run build:space-colonization` to target a specific workspace directly.
+`npm run build:space-colonization` to target those workspaces directly. For
+Starship Puzzler, use `npm run build:starship-puzzler`,
+`npm run test:starship-puzzler`, or `npm run check:starship-puzzler`.
 
 `npm test` runs the deterministic small-map JavaScript suite and is the fast
 default for local TDD. `npm run test:scale` compiles the AssemblyScript core and
@@ -207,4 +211,9 @@ projects/
   space-colonization/
     public/          Placeholder web entrypoint
     src/             Space colonization implementation (pending)
+  starship-puzzler/
+    assembly/        Deterministic orbital movement in WebAssembly
+    src/             Controller input, WASM adapter, and WebGPU renderer
+    public/          Prototype 0 web entrypoint
+    test*/           Unit and compiled-WASM acceptance tests
 ```

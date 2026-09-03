@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="WASMODEUS — a WebAssembly-powered simulation of 100,000 cars."
+    >
+    <title>WASMODEUS — Massive WASM Traffic Simulator</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <canvas id="world" aria-label="Interactive city traffic simulation"></canvas>
+
+    <header class="brand">
+      <div class="eyebrow">WebGPU render / WASM simulation / v1</div>
+      <h1>WASMODEUS</h1>
+      <p>50 m tiles. 18–36 km/h traffic. 100,000 scheduled drivers.</p>
+      <div id="backend-warning" class="backend-warning" role="status" hidden></div>
+    </header>
+
+    <aside class="telemetry" aria-label="Simulation statistics">
+      <div><span>Drivers</span><strong id="active-cars">100,000</strong></div>
+      <div><span>On road</span><strong id="on-road">0</strong></div>
+      <div><span>At home</span><strong id="at-home">0</strong></div>
+      <div><span>At work</span><strong id="at-work">0</strong></div>
+      <div><span>Clock</span><strong id="clock">07:30</strong></div>
+      <div><span>FPS</span><strong id="fps">—</strong></div>
+      <div><span>Tick</span><strong id="tick">0</strong></div>
+      <div><span>Zoom</span><strong id="zoom">1.00×</strong></div>
+      <div><span>Renderer</span><strong id="backend">WebGPU</strong></div>
+      <div><span>Drawing</span><strong id="drawn">100,000</strong></div>
+      <div>
+        <span>Junction flow</span>
+        <strong id="junction-flow">0 / 0</strong>
+      </div>
+      <div>
+        <span>Box held</span>
+        <strong id="downstream-blocked">0</strong>
+      </div>
+      <div><span>Road upgrades</span><strong id="road-upgrades">0 / 0</strong></div>
+      <div><span>Peak junction</span><strong id="junction-peak">0</strong></div>
+      <div><span>Adaptive</span><strong id="demand-state">Manual</strong></div>
+    </aside>
+
+    <div class="plot-legend" aria-label="Map plot legend">
+      <span><i class="home-plot"></i>Home plots</span>
+      <span><i class="work-plot"></i>Work plots</span>
+    </div>
+
+    <nav class="controls" aria-label="Simulation controls">
+      <button id="play-button" type="button" aria-pressed="false">Pause</button>
+      <label>
+        <span>Speed</span>
+        <select id="speed">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
+      </label>
+      <label class="toggle">
+        <input id="dynamic-cars" type="checkbox">
+        <span>Dynamic cars</span>
+      </label>
+      <label class="toggle">
+        <input id="dynamic-roads" type="checkbox" checked>
+        <span>Dynamic roads</span>
+      </label>
+      <label class="demand-control">
+        <span>Demand</span>
+        <input
+          id="desired-demand"
+          type="range"
+          min="25000"
+          max="100000"
+          step="5000"
+          value="100000"
+        >
+        <output id="demand-value" for="desired-demand">100k</output>
+      </label>
+      <button id="reset-button" type="button">Reset view</button>
+    </nav>
+
+    <div class="help">Drag to pan · Scroll in to inspect tiles · Space to pause · 0 to reset</div>
+    <div id="loading" role="status"><span></span> Negotiating with the GPU…</div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

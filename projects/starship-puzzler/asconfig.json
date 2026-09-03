@@ -1,0 +1,19 @@
+{
+  "options": {
+    "exportRuntime": true,
+    "importMemory": false,
+    "initialMemory": 1,
+    "maximumMemory": 16,
+    "noAssert": false,
+    "runtime": "stub"
+  },
+  "targets": {
+    "release": {
+      "outFile": "public/orbital-motion.wasm",
+      "textFile": "build/orbital-motion.wat",
+      "sourceMap": true,
+      "optimizeLevel": 3,
+      "shrinkLevel": 1
+    }
+  }
+}
