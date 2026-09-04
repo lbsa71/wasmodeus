@@ -5,8 +5,8 @@ WASMODEUS is now organized as a multi-project workspace.
 `projects/space-colonization` contains the galaxy simulation. The
 `projects/starship-puzzler` workspace is a WebAssembly/WebGPU proof-of-fun
 prototype for deterministic orbital-route movement. `projects/ground-truth` is a
-WebGPU proof of concept in which a static image and a fixed pool of one million
-Newtonian pixels continuously trade places.
+WebGPU proof of concept: a procedural cave world of Newtonian sand pixels, much
+larger than the screen, that you pan around and blow holes in.
 
 Traffic version 1 remains a browser-based, WebGPU-first massive traffic
 simulator with a WebAssembly simulation core. Version 1 models a logical 1,000 ×
@@ -222,8 +222,9 @@ projects/
     public/          Prototype 0 web entrypoint
     test*/           Unit and compiled-WASM acceptance tests
   ground-truth/
-    src/core/        Pure simulation logic: cell encoding, integrator, servos
+    src/core/        Pure logic: cell encoding, cohesion, camera, world generation
     src/gpu/         Device, pipelines, buffers, and the WGSL compute passes
+    src/worker/      World generation, off the main thread
     src/ui/          Debug counters and the frame-rate meter
     public/          Web entrypoint
     test/            Unit tests plus a shader/JavaScript layout contract test

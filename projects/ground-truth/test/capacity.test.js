@@ -17,6 +17,7 @@ test("the slider is exponential: one step up doubles the pool", () => {
   assert.equal(capacityFromExponent(10), 1024);
   assert.equal(capacityFromExponent(11), 2048);
   assert.equal(capacityFromExponent(20), 1_048_576);
+  assert.equal(capacityFromExponent(27), 134_217_728);
 });
 
 test("the slider clamps rather than producing an unallocatable pool", () => {
@@ -33,10 +34,14 @@ test("a capacity round-trips back to the slider position that produced it", () =
   }
 });
 
-test("the default pool is the brief's one million pixels and is reachable", () => {
-  assert.equal(DEFAULT_CAPACITY, 1_000_000);
+test("the default pool is ten million and sits inside the slider's range", () => {
+  assert.equal(DEFAULT_CAPACITY, 10_000_000);
   const exponent = exponentFromCapacity(DEFAULT_CAPACITY);
   assert.ok(exponent > MIN_EXPONENT && exponent < MAX_EXPONENT);
+});
+
+test("the slider reaches nine figures", () => {
+  assert.ok(capacityFromExponent(MAX_EXPONENT) >= 100_000_000);
 });
 
 test("the free-slot ring is padded to a power of two large enough to hold the pool", () => {

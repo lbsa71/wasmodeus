@@ -53,6 +53,17 @@ test("per-frame counters come through untouched", () => {
   assert.equal(stats.denied, 90);
 });
 
+test("crowding and burial are counted separately", () => {
+  // `crowded` is two pixels wanting one cell, which is normal in a collapse.
+  // `stuck` is a pixel with no free cell anywhere near, which should drain to
+  // zero once the pile settles — a reading that stays high means pixels are
+  // being buried faster than they can work their way out.
+  const stats = decodeCounters(block({ crowded: 9000, stuck: 120 }), 1_000_000);
+  assert.equal(stats.crowded, 9000);
+  assert.equal(stats.stuck, 120);
+  assert.ok(stats.stuck <= stats.crowded, "burial is a subset of crowding");
+});
+
 test("an unknown counter name is a programming error, not a silent zero", () => {
   assert.throws(() => counterIndex("nope"), /Unknown counter/);
 });

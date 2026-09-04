@@ -2,9 +2,9 @@
   "name": "@wasmodeus/ground-truth",
   "private": true,
   "type": "module",
-  "description": "A WebGPU proof of concept where a static image and a fixed pool of Newtonian pixels trade places.",
+  "description": "A WebGPU proof of concept: a procedural cave world of Newtonian sand pixels you can blow holes in.",
   "scripts": {
-    "build": "esbuild src/main.js --bundle --format=esm --sourcemap --outfile=public/app.js --loader:.wgsl=text",
+    "build": "esbuild src/main.js --bundle --format=esm --sourcemap --outfile=public/app.js --loader:.wgsl=text && esbuild src/worker/world-worker.js --bundle --format=esm --sourcemap --outfile=public/world-worker.js",
     "dev": "npm run build && python -m http.server 4175 --directory public",
     "lint": "eslint .",
     "typecheck": "tsc --project jsconfig.json",

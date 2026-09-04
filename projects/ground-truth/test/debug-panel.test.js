@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { FrameRateMeter, debugRows } from "../src/ui/debug-panel.js";
 import { decodeCounters } from "../src/core/counters.js";
 
-const CONTEXT = { fps: 60, frame: 120, restThreshold: 2, substeps: 4 };
+const CONTEXT = { fps: 60, frame: 120, restThreshold: 2, substeps: 4, camera: { x: 2048, y: 1024, scale: 0.5 } };
 
 /** @param {Partial<Record<string, number>>} overrides */
 function stats(overrides = {}, capacity = 1_000_000) {
@@ -28,6 +28,18 @@ test("the panel reports the pool size and how much of it is moving", () => {
 test("a starved image is flagged: denied pixels wanted to move and could not", () => {
   assert.equal(value(debugRows(stats({ denied: 0 }), CONTEXT), "denied/f").warn, false);
   assert.equal(value(debugRows(stats({ denied: 400 }), CONTEXT), "denied/f").warn, true);
+});
+
+test("the panel reports where the camera is looking and how far in", () => {
+  const rows = debugRows(stats(), CONTEXT);
+  assert.equal(value(rows, "view").value, "2048, 1024");
+  assert.equal(value(rows, "zoom").value, "1:2.0");
+});
+
+test("buried pixels are flagged but ordinary crowding is not", () => {
+  assert.equal(value(debugRows(stats({ crowded: 9000 }), CONTEXT), "crowded/f").warn, undefined);
+  assert.equal(value(debugRows(stats({ stuck: 0 }), CONTEXT), "stuck/f").warn, false);
+  assert.equal(value(debugRows(stats({ stuck: 40 }), CONTEXT), "stuck/f").warn, true);
 });
 
 test("a saturated pool and a sluggish frame rate are both flagged", () => {

@@ -5,11 +5,15 @@
  * sweep while still resolving the knee where the simulation goes sluggish.
  */
 export const MIN_EXPONENT = 10;
-export const MAX_EXPONENT = 21;
+export const MAX_EXPONENT = 27;
 /** Eighth-of-an-octave steps: ~9% capacity change per notch. */
 export const EXPONENT_STEP = 0.125;
-/** The headline target from the brief: one million pixels potentially moving. */
-export const DEFAULT_CAPACITY = 1_000_000;
+/**
+ * Ten million by default. The device's own limits cap the top of the slider —
+ * see `maxCapacityFor` — and the world's total matter caps how many of those
+ * slots can ever actually be filled.
+ */
+export const DEFAULT_CAPACITY = 10_000_000;
 
 /**
  * @param {number} exponent
@@ -17,6 +21,7 @@ export const DEFAULT_CAPACITY = 1_000_000;
  */
 export function capacityFromExponent(exponent) {
   const clamped = Math.min(MAX_EXPONENT, Math.max(MIN_EXPONENT, exponent));
+  // The device's own ceiling is applied separately, by the engine.
   return Math.max(1, Math.round(2 ** clamped));
 }
 
@@ -25,7 +30,7 @@ export function capacityFromExponent(exponent) {
  * @returns {number} the slider position that reproduces `capacity`
  */
 export function exponentFromCapacity(capacity) {
-  return Math.min(MAX_EXPONENT, Math.max(MIN_EXPONENT, Math.log2(Math.max(1, capacity))));
+  return Math.max(MIN_EXPONENT, Math.log2(Math.max(1, capacity)));
 }
 
 /** @param {number} value @returns {number} smallest power of two `>= value` */

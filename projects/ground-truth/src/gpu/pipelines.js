@@ -15,6 +15,7 @@ import { COMPUTE_PASSES } from "../core/layout.js";
  *   compositeLayout: GPUBindGroupLayout,
  *   compute: Record<string, GPUComputePipeline>,
  *   initPool: GPUComputePipeline,
+ *   clearImpulse: GPUComputePipeline,
  *   composite: GPURenderPipeline,
  * }}
  * @param {GPUTextureFormat} format
@@ -28,6 +29,8 @@ export function createPipelines(device, format) {
       { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
       { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
       { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+      { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+      { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
     ],
   });
   const compositeLayout = device.createBindGroupLayout({
@@ -58,6 +61,7 @@ export function createPipelines(device, format) {
     compositeLayout,
     compute,
     initPool: computePipeline("init_pool"),
+    clearImpulse: computePipeline("clear_impulse"),
     composite: device.createRenderPipeline({
       label: "ground-truth-composite",
       layout: device.createPipelineLayout({ bindGroupLayouts: [compositeLayout] }),

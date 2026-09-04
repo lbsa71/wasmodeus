@@ -4,20 +4,40 @@
  * the two ever drift.
  */
 
-/** `pos: vec2f, vel: vec2f, color: u32, last_cell: u32, rest: u32, flags: u32`. */
-export const PARTICLE_STRIDE_BYTES = 32;
+/**
+ * `pos_x: f32, pos_y: f32, vel_x: f32, vel_y: f32, last_cell: u32`.
+ *
+ * Scalars rather than `vec2f` on purpose: a `vec2f` would align the struct to
+ * eight bytes and pad it back up to 24. At twenty bytes a two-gigabyte storage
+ * binding — the most WebGPU allows — holds 107 million pixels, which is what
+ * puts nine figures within reach of the slider at all.
+ */
+export const PARTICLE_STRIDE_BYTES = 20;
 export const PARTICLE_POS_X = 0;
+export const PARTICLE_POS_Y = 1;
 export const PARTICLE_VEL_X = 2;
-export const PARTICLE_COLOR = 4;
-export const PARTICLE_LAST_CELL = 5;
-export const PARTICLE_REST = 6;
-export const PARTICLE_FLAGS = 7;
+export const PARTICLE_VEL_Y = 3;
+export const PARTICLE_LAST_CELL = 4;
 
-export const FLAG_ALIVE = 1;
-export const FLAG_DEPOSIT = 2;
+/**
+ * Per-pixel state lives in its own `array<u32>` rather than in the struct.
+ * Every pass begins by asking whether a slot is alive, and with a pool that is
+ * mostly idle — which is the whole point of a hundred-million ceiling — that
+ * question should cost four bytes, not twenty.
+ *
+ * Bits 0-23 are colour and 25-28 are the bond, in the same places as a field
+ * word, so `state & MATERIAL_MASK` is what a pixel carries and what it deposits.
+ * Bit 24 is `ALIVE` here where a field word has `OCCUPIED`.
+ */
+export const STATE_BYTES = 4;
+export const STATE_ALIVE_BIT = 0x01000000;
+export const STATE_REST_SHIFT = 29;
+export const STATE_REST_MASK = 0xe0000000;
+/** Three bits of rest, so a pixel may sit still at most this many frames. */
+export const MAX_REST = 7;
 
-/** `Params` is 24 words; the trailing pair pads it to a 16-byte multiple. */
-export const PARAMS_BYTES = 96;
+/** `Params` runs to word 27, which is already a 16-byte multiple. */
+export const PARAMS_BYTES = 112;
 
 /** Word indices into the `Params` uniform. `U_` is `u32`, `F_` is `f32`. */
 export const U_WORLD_X = 0;
@@ -30,19 +50,24 @@ export const F_DAMPING = 6;
 export const F_RESTITUTION = 7;
 export const U_REST_THRESHOLD = 8;
 export const U_FRAME = 9;
-export const F_INTAKE_CHANCE = 10;
-export const U_INTAKE_ROWS = 11;
-export const F_FOUNTAIN_X = 12;
-export const F_FOUNTAIN_SPREAD = 13;
-export const F_FOUNTAIN_SPEED = 14;
-export const F_DISLODGE_SPEED = 15;
-// `blast: vec4f` needs 16-byte alignment, which word 16 already satisfies.
+export const F_SLUMP_CHANCE = 10;
+export const F_SLIDE_SPEED = 11;
+export const F_DISLODGE_SPEED = 12;
+// Words 13-15 are the padding WGSL inserts to put `blast: vec4f` on a 16-byte
+// boundary. Nothing writes them.
 export const F_BLAST_X = 16;
 export const F_BLAST_Y = 17;
 export const F_BLAST_RADIUS = 18;
 export const F_BLAST_STRENGTH = 19;
 export const F_VIEWPORT_X = 20;
 export const F_VIEWPORT_Y = 21;
+export const F_CAMERA_X = 22;
+export const F_CAMERA_Y = 23;
+export const F_CAMERA_SCALE = 24;
+export const U_RUBBLE_BOND = 25;
+// `brush_drag: vec2f` needs 8-byte alignment, which word 26 already satisfies.
+export const F_DRAG_X = 26;
+export const F_DRAG_Y = 27;
 
 /**
  * @typedef {{
@@ -50,11 +75,12 @@ export const F_VIEWPORT_Y = 21;
  *   capacity: number, ringMask: number,
  *   gravity: number, dt: number, damping: number, restitution: number,
  *   restThreshold: number, frame: number,
- *   intakeChance: number, intakeRows: number,
- *   fountain: { x: number, spread: number, speed: number },
- *   dislodgeSpeed: number,
+ *   slumpChance: number, slideSpeed: number, dislodgeSpeed: number,
  *   blast: { x: number, y: number, radius: number, strength: number },
- *   viewport: { width: number, height: number }
+ *   viewport: { width: number, height: number },
+ *   camera: { x: number, y: number, scale: number },
+ *   rubbleBond: number,
+ *   drag: { x: number, y: number }
  * }} SimulationParams
  */
 
@@ -81,11 +107,8 @@ export function writeParams(target, params) {
   f[F_RESTITUTION] = params.restitution;
   u[U_REST_THRESHOLD] = params.restThreshold;
   u[U_FRAME] = params.frame;
-  f[F_INTAKE_CHANCE] = params.intakeChance;
-  u[U_INTAKE_ROWS] = params.intakeRows;
-  f[F_FOUNTAIN_X] = params.fountain.x;
-  f[F_FOUNTAIN_SPREAD] = params.fountain.spread;
-  f[F_FOUNTAIN_SPEED] = params.fountain.speed;
+  f[F_SLUMP_CHANCE] = params.slumpChance;
+  f[F_SLIDE_SPEED] = params.slideSpeed;
   f[F_DISLODGE_SPEED] = params.dislodgeSpeed;
   f[F_BLAST_X] = params.blast.x;
   f[F_BLAST_Y] = params.blast.y;
@@ -93,7 +116,26 @@ export function writeParams(target, params) {
   f[F_BLAST_STRENGTH] = params.blast.strength;
   f[F_VIEWPORT_X] = params.viewport.width;
   f[F_VIEWPORT_Y] = params.viewport.height;
+  f[F_CAMERA_X] = params.camera.x;
+  f[F_CAMERA_Y] = params.camera.y;
+  f[F_CAMERA_SCALE] = params.camera.scale;
+  u[U_RUBBLE_BOND] = params.rubbleBond;
+  f[F_DRAG_X] = params.drag.x;
+  f[F_DRAG_Y] = params.drag.y;
   return target;
+}
+
+/**
+ * Largest pool the device can hold, set by the biggest storage buffer it will
+ * bind. The particle array is the constraint; the state array and the free ring
+ * are a fifth of its size each.
+ *
+ * @param {{ maxStorageBufferBindingSize: number, maxBufferSize: number }} limits
+ * @returns {number}
+ */
+export function maxCapacityFor(limits) {
+  const largest = Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
+  return Math.max(1, Math.floor(largest / PARTICLE_STRIDE_BYTES));
 }
 
 /** Workgroup size shared by every compute entry point. */
@@ -111,4 +153,29 @@ export const COMPUTE_PASSES = ["prepare", "integrate", "advance", "settle", "emi
  */
 export function workgroupCount(items) {
   return Math.max(1, Math.ceil(items / WORKGROUP_SIZE));
+}
+
+/** WebGPU's default cap on workgroups per dispatch dimension. */
+export const MAX_WORKGROUPS_PER_DIMENSION = 65535;
+
+/**
+ * Splits a dispatch across two dimensions.
+ *
+ * A world of twenty million cells needs more than eighty thousand workgroups,
+ * which overflows the per-dimension cap: the dispatch is rejected, the whole
+ * command buffer with it, and the frame silently renders nothing. Folding the
+ * excess into y keeps every dimension legal. The shaders undo the fold with
+ * `num_workgroups`.
+ *
+ * @param {number} items
+ * @param {number} [maxPerDimension] from `device.limits.maxComputeWorkgroupsPerDimension`
+ * @returns {{ x: number, y: number }}
+ */
+export function dispatchGrid(items, maxPerDimension = MAX_WORKGROUPS_PER_DIMENSION) {
+  const groups = workgroupCount(items);
+  if (groups <= maxPerDimension) return { x: groups, y: 1 };
+  // Split as evenly as the cap allows, so few invocations are launched only to
+  // fall straight out of the bounds check.
+  const y = Math.ceil(groups / maxPerDimension);
+  return { x: Math.ceil(groups / y), y };
 }

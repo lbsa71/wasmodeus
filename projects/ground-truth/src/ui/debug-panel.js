@@ -3,10 +3,14 @@
  * numbers can be asserted without a DOM.
  */
 import { formatCount } from "../core/capacity.js";
+import { formatScale } from "../core/camera.js";
 
 /**
  * @param {import("../core/counters.js").CounterSnapshot} stats
- * @param {{ fps: number, frame: number, restThreshold: number, substeps: number }} context
+ * @param {{
+ *   fps: number, frame: number, restThreshold: number, substeps: number,
+ *   camera: import("../core/camera.js").Camera
+ * }} context
  * @returns {{ label: string, value: string, warn?: boolean }[]}
  */
 export function debugRows(stats, context) {
@@ -20,12 +24,19 @@ export function debugRows(stats, context) {
     { label: "emitted/f", value: formatCount(stats.emitted) },
     { label: "settled/f", value: formatCount(stats.deposited) },
     { label: "struck/f", value: formatCount(stats.dislodged) },
-    { label: "undermined/f", value: formatCount(stats.undermined) },
+    { label: "fell/slumped", value: formatCount(stats.undermined) },
     // Cells that wanted to move but found the pool full: the "no more than N"
     // rule biting. A steady non-zero reading means the image is starved.
     { label: "denied/f", value: formatCount(stats.denied), warn: stats.denied > 0 },
+    // Two pixels wanting the same cell. Normal in a collapse; the loser is
+    // handed to a neighbouring cell rather than launched.
+    { label: "crowded/f", value: formatCount(stats.crowded) },
+    // Walled in on all eight sides with nowhere to go. Should be near zero.
+    { label: "stuck/f", value: formatCount(stats.stuck), warn: stats.stuck > 0 },
     { label: "rest frames", value: `${context.restThreshold}` },
     { label: "substeps", value: `${context.substeps}` },
+    { label: "view", value: `${Math.round(context.camera.x)}, ${Math.round(context.camera.y)}` },
+    { label: "zoom", value: formatScale(context.camera.scale) },
   ];
 }
 

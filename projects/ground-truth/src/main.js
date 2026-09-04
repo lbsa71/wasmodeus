@@ -8,7 +8,6 @@ import {
   formatCount,
 } from "./core/capacity.js";
 import { MAX_REST_THRESHOLD, MIN_REST_THRESHOLD } from "./core/rest.js";
-import { fieldFromImageData } from "./core/source-image.js";
 import { FrameRateMeter, debugRows } from "./ui/debug-panel.js";
 
 const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector("#world"));
@@ -18,11 +17,15 @@ const capacityInput = /** @type {HTMLInputElement} */ (document.querySelector("#
 const capacityValue = /** @type {HTMLOutputElement} */ (document.querySelector("#capacity-value"));
 const restInput = /** @type {HTMLInputElement} */ (document.querySelector("#rest"));
 const restValue = /** @type {HTMLOutputElement} */ (document.querySelector("#rest-value"));
-const fountainInput = /** @type {HTMLInputElement} */ (document.querySelector("#fountain"));
-const fountainValue = /** @type {HTMLOutputElement} */ (document.querySelector("#fountain-value"));
+const slumpInput = /** @type {HTMLInputElement} */ (document.querySelector("#slump"));
+const slumpValue = /** @type {HTMLOutputElement} */ (document.querySelector("#slump-value"));
+const bounceInput = /** @type {HTMLInputElement} */ (document.querySelector("#bounce"));
+const bounceValue = /** @type {HTMLOutputElement} */ (document.querySelector("#bounce-value"));
+const blastInput = /** @type {HTMLInputElement} */ (document.querySelector("#blast"));
+const blastValue = /** @type {HTMLOutputElement} */ (document.querySelector("#blast-value"));
 const pauseButton = /** @type {HTMLButtonElement} */ (document.querySelector("#pause"));
 const resetButton = /** @type {HTMLButtonElement} */ (document.querySelector("#reset"));
-const imageInput = /** @type {HTMLInputElement} */ (document.querySelector("#image"));
+const reseedButton = /** @type {HTMLButtonElement} */ (document.querySelector("#reseed"));
 
 const resizeCanvas = () => {
   const ratio = Math.min(window.devicePixelRatio, 2);
@@ -30,54 +33,64 @@ const resizeCanvas = () => {
   canvas.height = Math.max(1, Math.round(window.innerHeight * ratio));
 };
 
+/** Client CSS pixels to the canvas drawing buffer, which is what the camera uses. */
+const devicePoint = (/** @type {PointerEvent|WheelEvent} */ event) => {
+  const bounds = canvas.getBoundingClientRect();
+  return {
+    x: (event.clientX - bounds.left) * (canvas.width / bounds.width),
+    y: (event.clientY - bounds.top) * (canvas.height / bounds.height),
+  };
+};
+
 /**
- * Rasterises a dropped image into the world, scaled to fit and stood on the
- * ground so nothing starts out unsupported.
- *
- * @param {GroundTruthEngine} engine
- * @param {File} file
+ * @param {Worker} worker
+ * @param {{ width: number, height: number }} world
+ * @param {number} seed
+ * @returns {Promise<import("./core/field-format.js").Field>}
  */
-async function loadImageFile(engine, file) {
-  const { width, height } = engine.settings.world;
-  const bitmap = await createImageBitmap(file);
-  const scale = Math.min((width * 0.9) / bitmap.width, (height * 0.75) / bitmap.height);
-  const drawWidth = Math.max(1, Math.round(bitmap.width * scale));
-  const drawHeight = Math.max(1, Math.round(bitmap.height * scale));
-  const scratch = new OffscreenCanvas(drawWidth, drawHeight);
-  const context = scratch.getContext("2d");
-  if (!context) throw new Error("Unable to rasterise the image.");
-  context.drawImage(bitmap, 0, 0, drawWidth, drawHeight);
-  bitmap.close();
-  const pixels = context.getImageData(0, 0, drawWidth, drawHeight);
-  engine.loadField(fieldFromImageData(pixels, {
-    width,
-    height,
-    offsetX: Math.round((width - drawWidth) / 2),
-    offsetY: 0,
-  }));
+function carveWorld(worker, world, seed) {
+  return new Promise((resolve, reject) => {
+    worker.onmessage = (event) => {
+      if (!event.data.ok) { reject(new Error(event.data.message)); return; }
+      statusLine.textContent = `${world.width} x ${world.height} world carved in ${Math.round(event.data.milliseconds)} ms`;
+      resolve(new Uint32Array(event.data.buffer));
+    };
+    worker.onerror = (event) => reject(new Error(event.message));
+    worker.postMessage({ width: world.width, height: world.height, seed });
+  });
 }
 
 try {
   resizeCanvas();
   const engine = await GroundTruthEngine.create(canvas);
   const meter = new FrameRateMeter();
-  statusLine.textContent = `${engine.settings.world.width} × ${engine.settings.world.height} world`;
+  const worker = new Worker(new URL("./world-worker.js", import.meta.url), { type: "module" });
+  engine.onDeviceError = (message) => {
+    statusLine.textContent = `GPU error: ${message}`;
+    statusLine.classList.add("error");
+  };
 
   capacityInput.min = `${MIN_EXPONENT}`;
-  capacityInput.max = `${MAX_EXPONENT}`;
+  // The top of the slider is whatever this device's largest storage buffer can
+  // hold, not a constant: a 2 GB binding is 107 million pixels, a smaller one
+  // proportionally fewer.
+  capacityInput.max = `${Math.min(MAX_EXPONENT, exponentFromCapacity(engine.maxCapacity))}`;
   capacityInput.step = `${EXPONENT_STEP}`;
   capacityInput.value = `${exponentFromCapacity(engine.settings.capacity)}`;
   capacityValue.textContent = formatCount(engine.settings.capacity);
-
   restInput.min = `${MIN_REST_THRESHOLD}`;
   restInput.max = `${MAX_REST_THRESHOLD}`;
   restInput.value = `${engine.settings.restThreshold}`;
   restValue.textContent = `${engine.settings.restThreshold}`;
-  fountainValue.textContent = `${Number(fountainInput.value).toFixed(2)}×`;
+  slumpInput.value = `${engine.settings.slumpChance}`;
+  slumpValue.textContent = engine.settings.slumpChance.toFixed(2);
+  bounceInput.value = `${engine.settings.restitution}`;
+  bounceValue.textContent = engine.settings.restitution.toFixed(2);
+  blastInput.value = `${engine.settings.brushRadius}`;
+  blastValue.textContent = `${engine.settings.brushRadius} px`;
 
-  // Preview the pool size while dragging, but only rebuild the buffers once
-  // the slider is released — a 64 MB reallocation per pixel of travel is not
-  // a useful measurement of anything.
+  // Preview the pool size while dragging, but only rebuild the buffers once the
+  // slider is released — a reallocation per pixel of travel measures nothing.
   capacityInput.addEventListener("input", () => {
     capacityValue.textContent = formatCount(capacityFromExponent(Number(capacityInput.value)));
   });
@@ -88,9 +101,17 @@ try {
     engine.setRestThreshold(Number(restInput.value));
     restValue.textContent = `${engine.settings.restThreshold}`;
   });
-  fountainInput.addEventListener("input", () => {
-    engine.setFountainScale(Number(fountainInput.value));
-    fountainValue.textContent = `${Number(fountainInput.value).toFixed(2)}×`;
+  slumpInput.addEventListener("input", () => {
+    engine.setSlumpChance(Number(slumpInput.value));
+    slumpValue.textContent = engine.settings.slumpChance.toFixed(2);
+  });
+  bounceInput.addEventListener("input", () => {
+    engine.setRestitution(Number(bounceInput.value));
+    bounceValue.textContent = engine.settings.restitution.toFixed(2);
+  });
+  blastInput.addEventListener("input", () => {
+    engine.setBrushRadius(Number(blastInput.value));
+    blastValue.textContent = `${engine.settings.brushRadius} px`;
   });
   pauseButton.addEventListener("click", () => {
     engine.paused = !engine.paused;
@@ -98,34 +119,65 @@ try {
     pauseButton.setAttribute("aria-pressed", `${engine.paused}`);
   });
   resetButton.addEventListener("click", () => engine.reset());
-  imageInput.addEventListener("change", async () => {
-    const file = imageInput.files?.[0];
-    if (!file) return;
+  reseedButton.addEventListener("click", async () => {
+    reseedButton.disabled = true;
+    engine.settings.seed += 1;
+    statusLine.textContent = "Carving a new world…";
     try {
-      await loadImageFile(engine, file);
-      statusLine.textContent = `${file.name} loaded`;
+      engine.loadWorld(await carveWorld(worker, engine.settings.world, engine.settings.seed));
     } catch (error) {
-      statusLine.textContent = `Could not load that image: ${error instanceof Error ? error.message : error}`;
+      statusLine.textContent = error instanceof Error ? error.message : `${error}`;
     }
+    reseedButton.disabled = false;
   });
 
-  let pointerDown = false;
-  const perturbAt = (/** @type {PointerEvent} */ event) => {
-    const point = engine.worldFromClient(event.clientX, event.clientY);
-    if (point) engine.perturb(point.x, point.y);
-  };
+  // Left drag pans; shift-drag or right-drag smudges, dragging material the way
+  // the pointer goes; alt-drag detonates. A big world needs the plain drag for
+  // navigation, so the tools are the modified gestures.
+  let panning = false;
+  let brushing = false;
+  let last = { x: 0, y: 0 };
+  let lastWorld = { x: 0, y: 0 };
+  canvas.addEventListener("contextmenu", (event) => event.preventDefault());
   canvas.addEventListener("pointerdown", (event) => {
-    pointerDown = true;
     canvas.setPointerCapture(event.pointerId);
-    perturbAt(event);
+    last = devicePoint(event);
+    lastWorld = engine.worldFromScreen(last.x, last.y);
+    if (event.button === 2 || event.shiftKey || event.altKey) {
+      brushing = true;
+      // A blast needs no direction, so it can fire on the press. A smudge has
+      // nowhere to carry anything until the pointer has actually moved.
+      if (event.altKey) engine.explodeAt(lastWorld.x, lastWorld.y);
+    } else {
+      panning = true;
+    }
   });
   canvas.addEventListener("pointermove", (event) => {
-    if (pointerDown) perturbAt(event);
+    const point = devicePoint(event);
+    if (panning) engine.pan(point.x - last.x, point.y - last.y);
+    if (brushing) {
+      const world = engine.worldFromScreen(point.x, point.y);
+      if (event.altKey) {
+        engine.explodeAt(world.x, world.y);
+      } else {
+        engine.smudgeAt(world.x, world.y, world.x - lastWorld.x, world.y - lastWorld.y);
+      }
+      lastWorld = world;
+    }
+    last = point;
   });
-  const releasePointer = () => { pointerDown = false; };
+  const releasePointer = () => { panning = false; brushing = false; };
   canvas.addEventListener("pointerup", releasePointer);
   canvas.addEventListener("pointercancel", releasePointer);
-  window.addEventListener("resize", resizeCanvas);
+  canvas.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const point = devicePoint(event);
+    engine.zoomAt(Math.exp(-event.deltaY * 0.0015), point.x, point.y);
+  }, { passive: false });
+  window.addEventListener("resize", () => {
+    resizeCanvas();
+    engine.resize();
+  });
 
   const renderDebug = (/** @type {number} */ fps) => {
     const rows = debugRows(engine.stats, {
@@ -133,6 +185,7 @@ try {
       frame: engine.frame,
       restThreshold: engine.settings.restThreshold,
       substeps: engine.settings.substeps,
+      camera: engine.camera,
     });
     debugList.replaceChildren(...rows.flatMap((row) => {
       const term = document.createElement("dt");
@@ -150,6 +203,9 @@ try {
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
+
+  statusLine.textContent = "Carving caves…";
+  engine.loadWorld(await carveWorld(worker, engine.settings.world, engine.settings.seed));
 } catch (error) {
   statusLine.textContent = error instanceof Error ? error.message : `${error}`;
   statusLine.classList.add("error");

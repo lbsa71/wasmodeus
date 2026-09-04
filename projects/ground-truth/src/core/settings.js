@@ -1,14 +1,15 @@
 /**
- * Tuning for the simulation, in world units (one unit is one pixel of the
- * image) and seconds.
+ * Tuning for the simulation, in world units (one unit is one cell) and seconds.
  */
 import { DEFAULT_CAPACITY } from "./capacity.js";
 import { DEFAULT_REST_THRESHOLD } from "./rest.js";
-import { DEFAULT_WORLD_HEIGHT, DEFAULT_WORLD_WIDTH } from "./source-image.js";
+import { DEFAULT_WORLD_HEIGHT, DEFAULT_WORLD_WIDTH } from "./world-gen.js";
+import { RUBBLE_BOND } from "./palette.js";
 
 /**
  * @typedef {{
  *   world: { width: number, height: number },
+ *   seed: number,
  *   capacity: number,
  *   restThreshold: number,
  *   substeps: number,
@@ -17,45 +18,52 @@ import { DEFAULT_WORLD_HEIGHT, DEFAULT_WORLD_WIDTH } from "./source-image.js";
  *   damping: number,
  *   restitution: number,
  *   dislodgeSpeed: number,
- *   intakeRows: number,
- *   refillFrames: number,
- *   fountain: { x: number, spread: number, speed: number },
- *   blastRadius: number,
- *   blastStrength: number
+ *   slumpChance: number,
+ *   rubbleBond: number,
+ *   slideSpeed: number,
+ *   brushRadius: number,
+ *   blastStrength: number,
+ *   smudgeStrength: number
  * }} Settings
  */
 
 /** @returns {Settings} */
 export function defaultSettings() {
-  const world = { width: DEFAULT_WORLD_WIDTH, height: DEFAULT_WORLD_HEIGHT };
   return {
-    world,
+    world: { width: DEFAULT_WORLD_WIDTH, height: DEFAULT_WORLD_HEIGHT },
+    seed: 1,
     capacity: DEFAULT_CAPACITY,
     restThreshold: DEFAULT_REST_THRESHOLD,
-    // Four substeps keep a fast jet under ~2.5 cells per step, which is what
-    // stops it tunnelling straight through a one-pixel-thick wall.
+    // Four substeps keep a fast pixel under about two cells per step, which is
+    // what stops an explosion firing debris straight through a cave wall.
     substeps: 4,
     frameSeconds: 1 / 60,
     gravity: 500,
     damping: 0.999,
-    restitution: 0.25,
-    dislodgeSpeed: 90,
-    // The fountain draws from this many rows at the very bottom of the world.
-    intakeRows: 24,
-    // Frames the intake servo should take to refill an empty pool.
-    refillFrames: 30,
-    fountain: { x: world.width * 0.5, spread: world.width * 0.012, speed: 680 },
-    blastRadius: 28,
-    blastStrength: 320,
+    // Elasticity of every impact, and the only thing that removes energy from
+    // a collision. A striker that knocks a pixel loose keeps `(1-e)/2` of its
+    // velocity and hands over `(1+e)/2`; one that hits immovable material
+    // simply reflects at `-e`. See `src/core/collision.js`.
+    restitution: 0.18,
+    // Speed an impact needs to shake a *marginally held* cell loose. A cell
+    // with support to spare needs this much again for every surplus neighbour,
+    // so a surface splashes while buried material ignores the same blow.
+    dislodgeSpeed: 110,
+    // Once a cell's bond has let go, how eagerly it slumps sideways rather than
+    // waiting. Cohesion decides whether material moves at all; this decides how
+    // fluid it looks when it does. See `src/core/sand.js`.
+    slumpChance: 0.6,
+    // Debris settles with this bond, so a blasted bank behaves like gravel from
+    // then on rather than re-freezing into the cliff it came from.
+    rubbleBond: RUBBLE_BOND,
+    // Sideways speed given to a pixel rolling off a heap. Fast enough to change
+    // cell inside `restThreshold` frames, or it would settle before it moved.
+    slideSpeed: 60,
+    brushRadius: 90,
+    // A blast fires material radially, which in a confined pocket mostly means
+    // into the nearest wall. A smudge carries it along the drag instead, so it
+    // is far gentler and needs a fraction of the speed.
+    blastStrength: 700,
+    smudgeStrength: 240,
   };
-}
-
-/**
- * Number of cells the fountain can draw from, used by the intake servo.
- *
- * @param {Settings} settings
- * @returns {number}
- */
-export function intakeCellCount(settings) {
-  return settings.world.width * settings.intakeRows;
 }

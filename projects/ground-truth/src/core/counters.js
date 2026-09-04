@@ -16,11 +16,15 @@ export const COUNTER_WORDS = [
   "dislodged",
   "undermined",
   "denied",
+  "crowded",
+  "stuck",
 ];
 /** Padded past the 32 bytes of counters so the block stays 16-byte aligned. */
 export const COUNTERS_BYTES = 48;
 /** Counters reset by the `prepare` pass every frame; the rest are persistent. */
-export const PER_FRAME_COUNTERS = ["emitted", "deposited", "dislodged", "undermined", "denied"];
+export const PER_FRAME_COUNTERS = [
+  "emitted", "deposited", "dislodged", "undermined", "denied", "crowded", "stuck",
+];
 
 /** @param {string} name @returns {number} word index of a counter */
 export function counterIndex(name) {
@@ -33,6 +37,7 @@ export function counterIndex(name) {
  * @typedef {{
  *   head: number, tail: number, popBudget: number, emitted: number,
  *   deposited: number, dislodged: number, undermined: number, denied: number,
+ *   crowded: number, stuck: number,
  *   moving: number, free: number, capacity: number, utilisation: number
  * }} CounterSnapshot
  */

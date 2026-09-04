@@ -8,9 +8,9 @@
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <canvas id="world" aria-label="Newtonian pixel simulation"></canvas>
+    <canvas id="world" aria-label="Procedural cave world of Newtonian sand pixels"></canvas>
 
-    <p id="status">Starting…</p>
+    <p id="status">Starting up…</p>
 
     <aside id="debug" aria-label="Simulation counters">
       <strong>GROUND TRUTH</strong>
@@ -23,21 +23,29 @@
         <input id="capacity" type="range" aria-label="Logarithmic pool size">
       </label>
       <label for="rest">
-        Rest frames <output id="rest-value" for="rest">2</output>
+        Rest frames <output id="rest-value" for="rest">1</output>
         <input id="rest" type="range" step="1" aria-label="Frames a pixel may sit still before it settles">
       </label>
-      <label for="fountain">
-        Fountain <output id="fountain-value" for="fountain">1.00×</output>
-        <input id="fountain" type="range" min="0" max="2" step="0.05" value="1" aria-label="Fountain intake rate">
+      <label for="slump">
+        Flow <output id="slump-value" for="slump">0.60</output>
+        <input id="slump" type="range" min="0" max="1" step="0.01" aria-label="How eagerly released material slumps sideways">
+      </label>
+      <label for="bounce">
+        Elasticity <output id="bounce-value" for="bounce">0.18</output>
+        <input id="bounce" type="range" min="0" max="1" step="0.01" aria-label="Coefficient of restitution for every impact">
+      </label>
+      <label for="blast">
+        Brush radius <output id="blast-value" for="blast">90 px</output>
+        <input id="blast" type="range" min="10" max="300" step="5" aria-label="Pointer brush radius in world pixels">
       </label>
       <div class="row">
         <button id="pause" type="button" aria-pressed="false">Pause</button>
         <button id="reset" type="button">Reset</button>
-        <label class="file" for="image">Image…<input id="image" type="file" accept="image/*"></label>
+        <button id="reseed" type="button">New world</button>
       </div>
     </form>
 
-    <p id="hint">Click or drag on the image to knock pixels loose</p>
+    <p id="hint">Drag to pan · wheel to zoom · shift-drag to smudge · alt-drag to blast</p>
 
     <script type="module" src="./app.js"></script>
   </body>

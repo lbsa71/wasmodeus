@@ -5,10 +5,12 @@
  * rest, so a ballistic apex cannot be mistaken for stillness.
  */
 import { SKY_CELL } from "./geometry.js";
+import { MAX_REST } from "./layout.js";
 
 export const MIN_REST_THRESHOLD = 1;
-export const MAX_REST_THRESHOLD = 16;
-export const DEFAULT_REST_THRESHOLD = 2;
+/** Rest is three bits inside the packed state word. */
+export const MAX_REST_THRESHOLD = MAX_REST;
+export const DEFAULT_REST_THRESHOLD = 1;
 
 /**
  * @typedef {{ lastCell: number, restFrames: number }} RestState

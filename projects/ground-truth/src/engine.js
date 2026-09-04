@@ -1,18 +1,19 @@
 /**
  * Ground Truth engine.
  *
- * The world holds two layers of the same grid: `field`, the static image, and
- * `overlay`, this frame's moving pixels. A fixed pool of particle slots is the
- * only budget for motion — a pixel can only leave the image if a slot is free,
- * and a slot only frees when a pixel settles back into the image.
+ * The world holds two layers of the same grid: `field`, the static world, and
+ * `overlay`, this frame's moving pixels. A pixel is never in both. A fixed pool
+ * of particle slots is the entire budget for motion — a pixel can only leave
+ * the world if a slot is free, and a slot only frees when a pixel comes to rest
+ * and blends back in.
  */
 import { decodeCounters } from "./core/counters.js";
-import { intakeChance } from "./core/fountain.js";
-import { PARAMS_BYTES, workgroupCount, writeParams } from "./core/layout.js";
+import { PARAMS_BYTES, dispatchGrid, maxCapacityFor, writeParams } from "./core/layout.js";
 import { ringMask } from "./core/capacity.js";
 import { clampRestThreshold } from "./core/rest.js";
-import { defaultSettings, intakeCellCount } from "./core/settings.js";
-import { createSourceField } from "./core/source-image.js";
+import { clampRestitution } from "./core/collision.js";
+import { defaultSettings } from "./core/settings.js";
+import { clampCamera, createCamera, panCamera, worldFromScreen, zoomCameraAt } from "./core/camera.js";
 import { acquireDevice } from "./gpu/device.js";
 import { createPipelines } from "./gpu/pipelines.js";
 import { SimulationResources } from "./gpu/resources.js";
@@ -33,15 +34,42 @@ export class GroundTruthEngine {
     this.settings = settings;
     this.frame = 0;
     this.paused = false;
-    this.fountainScale = 1;
+    /** True once a generated world has been handed over. */
+    this.ready = false;
+    /** @type {((message: string) => void)|null} Reports GPU faults to the UI. */
+    this.onDeviceError = null;
+    // A rejected dispatch invalidates the whole command buffer, and the frame
+    // then renders nothing at all. Without this the only symptom is a black
+    // screen, so faults are surfaced rather than swallowed.
+    device.addEventListener("uncapturederror", (event) => {
+      const error = /** @type {GPUUncapturedErrorEvent} */ (event).error;
+      this.#report(error.message);
+    });
+    device.lost.then((info) => {
+      this.ready = false;
+      this.#report(`The GPU device was lost: ${info.message || info.reason}`);
+    });
     /** @type {{ x: number, y: number, radius: number, strength: number }} */
     this.blast = { x: 0, y: 0, radius: 0, strength: 0 };
+    /** Drag direction of the pointer brush; zero means a radial blast. */
+    this.drag = { x: 0, y: 0 };
     this.paramsData = new ArrayBuffer(PARAMS_BYTES);
-    /** @type {import("./core/field-format.js").Field} */
-    this.sourceField = createSourceField(settings.world);
+    /** @type {import("./core/field-format.js").Field|null} */
+    this.sourceField = null;
     this.resources = new SimulationResources(device, settings.world);
-    this.stats = decodeCounters(new Uint32Array(12), settings.capacity);
-    this.reset(settings.capacity);
+    this.settings.capacity = Math.min(settings.capacity, maxCapacityFor(device.limits));
+    this.stats = decodeCounters(new Uint32Array(12), this.settings.capacity);
+    // Start looking at the surface, which is where the interesting boundary
+    // between sky, soil and rock is.
+    this.camera = createCamera(settings.world, this.viewport, {
+      y: settings.world.height * 0.8,
+      scale: 1,
+    });
+    /** @type {string|null} First GPU fault seen; repeats are not re-reported. */
+    this.reportedError = null;
+    this.maxWorkgroups = device.limits.maxComputeWorkgroupsPerDimension;
+    /** Largest pool this device can hold; the slider is capped to it. */
+    this.maxCapacity = maxCapacityFor(device.limits);
   }
 
   /** @param {HTMLCanvasElement} canvas @returns {Promise<GroundTruthEngine>} */
@@ -51,35 +79,57 @@ export class GroundTruthEngine {
     return new GroundTruthEngine(canvas, device, context, pipelines, defaultSettings());
   }
 
+  /** @returns {{ width: number, height: number }} the drawing buffer, in device pixels */
+  get viewport() {
+    return { width: this.canvas.width, height: this.canvas.height };
+  }
+
   /**
-   * Rebuilds the pool and restores the untouched image.
+   * Adopts a freshly generated world and starts simulating it.
+   *
+   * @param {import("./core/field-format.js").Field} field
+   */
+  loadWorld(field) {
+    const { width, height } = this.settings.world;
+    if (field.length !== width * height) {
+      throw new Error(`Expected a ${width} x ${height} world, got ${field.length} cells.`);
+    }
+    this.sourceField = field;
+    this.ready = true;
+    // Re-clamp: the camera was built before the world existed, and a view
+    // pointing outside it renders nothing but void.
+    this.camera = clampCamera(this.camera, this.settings.world, this.viewport);
+    this.reset();
+  }
+
+  /**
+   * Restores the untouched world and rebuilds the pool.
    *
    * @param {number} [capacity]
    */
   reset(capacity = this.settings.capacity) {
-    this.settings.capacity = capacity;
+    this.settings.capacity = Math.max(1, Math.min(this.maxCapacity, Math.round(capacity)));
+    capacity = this.settings.capacity;
     this.frame = 0;
+    this.blast = { x: 0, y: 0, radius: 0, strength: 0 };
+    this.drag = { x: 0, y: 0 };
     this.resources.allocatePool(capacity, this.pipelines.computeLayout, this.pipelines.compositeLayout);
-    this.resources.uploadField(this.sourceField);
+    if (this.sourceField) this.resources.uploadField(this.sourceField);
     this.resources.resetCounters(capacity);
     this.#writeParams();
     const encoder = this.device.createCommandEncoder({ label: "init-pool" });
     const pass = encoder.beginComputePass();
     pass.setPipeline(this.pipelines.initPool);
     pass.setBindGroup(0, this.#computeBindGroup());
-    pass.dispatchWorkgroups(workgroupCount(this.resources.ringSize));
+    const init = dispatchGrid(this.resources.ringSize, this.maxWorkgroups);
+    pass.dispatchWorkgroups(init.x, init.y);
+    // Stored momentum outlives a frame, so a reset has to wipe it too.
+    const cells = dispatchGrid(this.resources.cellCount, this.maxWorkgroups);
+    pass.setPipeline(this.pipelines.clearImpulse);
+    pass.dispatchWorkgroups(cells.x, cells.y);
     pass.end();
     this.device.queue.submit([encoder.finish()]);
     this.stats = decodeCounters(new Uint32Array(12), capacity);
-  }
-
-  /** @param {import("./core/field-format.js").Field} field a `width * height` field to use as the image */
-  loadField(field) {
-    if (field.length !== this.settings.world.width * this.settings.world.height) {
-      throw new Error("Source field does not match the world size.");
-    }
-    this.sourceField = field;
-    this.reset();
   }
 
   /** @param {number} threshold frames a pixel may sit still before settling */
@@ -87,50 +137,109 @@ export class GroundTruthEngine {
     this.settings.restThreshold = clampRestThreshold(threshold);
   }
 
-  /** @param {number} scale multiplier on the fountain intake servo, 0 stops it */
-  setFountainScale(scale) {
-    this.fountainScale = Math.max(0, scale);
+  /** @param {number} chance per-frame probability that a diagonally-unsupported pixel lets go */
+  setSlumpChance(chance) {
+    this.settings.slumpChance = Math.min(1, Math.max(0, chance));
   }
 
   /**
-   * Knocks every settled pixel inside a radius loose, so the image can be
-   * perturbed by hand as well as by the fountain.
+   * Coefficient of restitution: the elasticity of every impact. At 1 no energy
+   * leaves the system on collision and a disturbed pile trades it back and
+   * forth indefinitely.
+   *
+   * @param {number} restitution
+   */
+  setRestitution(restitution) {
+    this.settings.restitution = clampRestitution(restitution);
+  }
+
+  /** @param {number} radius world pixels */
+  setBrushRadius(radius) {
+    this.settings.brushRadius = Math.max(1, radius);
+  }
+
+  /** Re-clamps the camera after the drawing buffer changes size. */
+  resize() {
+    this.camera = clampCamera(this.camera, this.settings.world, this.viewport);
+  }
+
+  /** @param {number} dx @param {number} dy device pixels */
+  pan(dx, dy) {
+    this.camera = panCamera(this.camera, dx, dy, this.settings.world, this.viewport);
+  }
+
+  /** @param {number} factor @param {number} screenX @param {number} screenY device pixels */
+  zoomAt(factor, screenX, screenY) {
+    this.camera = zoomCameraAt(this.camera, factor, screenX, screenY, this.settings.world, this.viewport);
+  }
+
+  /**
+   * @param {number} screenX @param {number} screenY device pixels
+   * @returns {{ x: number, y: number }} world coordinates
+   */
+  worldFromScreen(screenX, screenY) {
+    return worldFromScreen(this.camera, this.viewport, screenX, screenY);
+  }
+
+  /**
+   * Drags everything under the brush along `dx, dy` — the smudge.
+   *
+   * Gentler than a blast, and better behaved for a reason worth knowing: a
+   * blast fires material radially, which inside a pocket means into the nearest
+   * wall, where most of it is too well bonded to break. The debris reflects,
+   * comes back inward, and mills about until the collapse buries it. A drag
+   * sends material somewhere it can actually go.
+   *
+   * @param {number} x @param {number} y world coordinates
+   * @param {number} dx @param {number} dy drag direction, any length
+   */
+  smudgeAt(x, y, dx, dy) {
+    const length = Math.hypot(dx, dy);
+    if (length < 1e-6) return;
+    this.blast = { x, y, radius: this.settings.brushRadius, strength: this.settings.smudgeStrength };
+    this.drag = { x: dx / length, y: dy / length };
+  }
+
+  /**
+   * Blows a crater. Unlike every other rule in the simulation this one ignores
+   * a cell's bond entirely, so it is the only thing that shifts bedrock.
    *
    * @param {number} x @param {number} y world coordinates
    */
-  perturb(x, y) {
-    this.blast = { x, y, radius: this.settings.blastRadius, strength: this.settings.blastStrength };
+  explodeAt(x, y) {
+    this.blast = { x, y, radius: this.settings.brushRadius, strength: this.settings.blastStrength };
+    this.drag = { x: 0, y: 0 };
   }
 
   /** Advances one frame and presents it. */
   step() {
+    if (!this.ready) return;
     if (!this.paused) this.frame += 1;
     this.#writeParams();
 
     const encoder = this.device.createCommandEncoder({ label: `frame-${this.frame}` });
-    const bindGroup = this.#computeBindGroup();
-    const poolGroups = workgroupCount(this.settings.capacity);
-    const cellGroups = workgroupCount(this.resources.cellCount);
+    const pool = dispatchGrid(this.settings.capacity, this.maxWorkgroups);
+    const cells = dispatchGrid(this.resources.cellCount, this.maxWorkgroups);
 
     const compute = encoder.beginComputePass({ label: "simulate" });
-    compute.setBindGroup(0, bindGroup);
+    compute.setBindGroup(0, this.#computeBindGroup());
     if (!this.paused) {
       compute.setPipeline(this.pipelines.compute.prepare);
       compute.dispatchWorkgroups(1);
       compute.setPipeline(this.pipelines.compute.integrate);
       for (let substep = 0; substep < this.settings.substeps; substep += 1) {
-        compute.dispatchWorkgroups(poolGroups);
+        compute.dispatchWorkgroups(pool.x, pool.y);
       }
       compute.setPipeline(this.pipelines.compute.advance);
-      compute.dispatchWorkgroups(poolGroups);
+      compute.dispatchWorkgroups(pool.x, pool.y);
       compute.setPipeline(this.pipelines.compute.settle);
-      compute.dispatchWorkgroups(poolGroups);
+      compute.dispatchWorkgroups(pool.x, pool.y);
       compute.setPipeline(this.pipelines.compute.emit);
-      compute.dispatchWorkgroups(cellGroups);
+      compute.dispatchWorkgroups(cells.x, cells.y);
       // Splat last, and only when emit has run: emit is what clears the
       // overlay, so splatting without it would draw over stale pixels.
       compute.setPipeline(this.pipelines.compute.splat);
-      compute.dispatchWorkgroups(poolGroups);
+      compute.dispatchWorkgroups(pool.x, pool.y);
     }
     compute.end();
 
@@ -153,27 +262,16 @@ export class GroundTruthEngine {
     this.resources.readback.collect(slot);
     this.stats = decodeCounters(this.resources.readback.latest, this.settings.capacity);
 
-    // A blast is a single-frame impulse; clear it once it has been dispatched.
+    // The brush is a single-frame impulse; clear it once it has been dispatched.
     this.blast = { x: 0, y: 0, radius: 0, strength: 0 };
+    this.drag = { x: 0, y: 0 };
   }
 
-  /**
-   * Maps a client-space point onto the letterboxed world, matching the
-   * composite shader's framing.
-   *
-   * @param {number} clientX @param {number} clientY
-   * @returns {{ x: number, y: number }|null} null when the point is on the letterbox
-   */
-  worldFromClient(clientX, clientY) {
-    const bounds = this.canvas.getBoundingClientRect();
-    const viewAspect = bounds.width / bounds.height;
-    const worldAspect = this.settings.world.width / this.settings.world.height;
-    const scaleX = viewAspect > worldAspect ? worldAspect / viewAspect : 1;
-    const scaleY = viewAspect > worldAspect ? 1 : viewAspect / worldAspect;
-    const u = ((clientX - bounds.left) / bounds.width - 0.5) / scaleX + 0.5;
-    const v = ((clientY - bounds.top) / bounds.height - 0.5) / scaleY + 0.5;
-    if (u < 0 || u > 1 || v < 0 || v > 1) return null;
-    return { x: u * this.settings.world.width, y: (1 - v) * this.settings.world.height };
+  /** @param {string} message */
+  #report(message) {
+    if (this.reportedError) return;
+    this.reportedError = message;
+    this.onDeviceError?.(message);
   }
 
   #computeBindGroup() {
@@ -190,7 +288,6 @@ export class GroundTruthEngine {
 
   #writeParams() {
     const settings = this.settings;
-    const chance = intakeChance(this.stats.free, intakeCellCount(settings), settings.refillFrames);
     writeParams(this.paramsData, {
       world: settings.world,
       capacity: settings.capacity,
@@ -201,12 +298,14 @@ export class GroundTruthEngine {
       restitution: settings.restitution,
       restThreshold: settings.restThreshold,
       frame: this.frame,
-      intakeChance: chance * this.fountainScale,
-      intakeRows: settings.intakeRows,
-      fountain: settings.fountain,
+      slumpChance: settings.slumpChance,
+      slideSpeed: settings.slideSpeed,
       dislodgeSpeed: settings.dislodgeSpeed,
       blast: this.blast,
-      viewport: { width: this.canvas.width, height: this.canvas.height },
+      viewport: this.viewport,
+      camera: this.camera,
+      rubbleBond: settings.rubbleBond,
+      drag: this.drag,
     });
     this.device.queue.writeBuffer(this.resources.params, 0, this.paramsData);
   }

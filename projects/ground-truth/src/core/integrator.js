@@ -5,6 +5,7 @@
  * sticking to the first thing it touches.
  */
 import { isBlocked } from "./geometry.js";
+import { slideDirection } from "./sand.js";
 
 /** Keeps a clamped particle strictly inside its cell. */
 const EDGE_EPSILON = 1e-3;
@@ -13,7 +14,10 @@ export const SKY_HEADROOM = 2;
 
 /**
  * @typedef {{ pos: [number, number], vel: [number, number] }} ParticleState
- * @typedef {{ gravity: number, dt: number, damping: number, restitution: number, dislodgeSpeed: number }} PhysicsParams
+ * @typedef {{
+ *   gravity: number, dt: number, damping: number, restitution: number,
+ *   dislodgeSpeed: number, slideSpeed?: number
+ * }} PhysicsParams
  * @typedef {{ width: number, height: number }} World
  */
 
@@ -22,10 +26,11 @@ export const SKY_HEADROOM = 2;
  * @param {ArrayLike<number>} field
  * @param {World} world
  * @param {PhysicsParams} params
+ * @param {number} [seed] breaks ties when both diagonals below are open
  * @returns {{ pos: [number, number], vel: [number, number], hits: [number, number][] }}
  *   `hits` lists occupied cells struck hard enough to dislodge.
  */
-export function integrate(particle, field, world, params) {
+export function integrate(particle, field, world, params, seed = 0) {
   const { width, height } = world;
   let [px, py] = particle.pos;
   let [vx, vy] = particle.vel;
@@ -48,11 +53,24 @@ export function integrate(particle, field, world, params) {
   }
 
   const nextY = py + vy * params.dt;
+  const falling = vy <= 0;
+  let landed = false;
   if (isBlocked(field, Math.floor(px), Math.floor(nextY), width, height)) {
     if (hard) hits.push([Math.floor(px), Math.floor(nextY)]);
     vy = -vy * params.restitution;
+    landed = true;
   } else {
     py = nextY;
+  }
+
+  // A pixel that has come to rest on a slope rolls off it rather than stacking
+  // into a needle. This is collision response, not a probability: unlike a
+  // settled pixel slumping, it always applies. Only a pixel that is not already
+  // moving sideways faster is redirected, so blast debris keeps its momentum.
+  const slide = params.slideSpeed ?? 0;
+  if (landed && falling && slide > 0 && Math.abs(vx) < slide) {
+    const direction = slideDirection(field, Math.floor(px), Math.floor(py), world, seed);
+    if (direction !== 0) vx = direction * slide;
   }
 
   px = Math.min(width - EDGE_EPSILON, Math.max(0, px));

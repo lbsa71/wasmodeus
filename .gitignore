@@ -2,6 +2,8 @@ node_modules/
 projects/*/build/
 projects/*/public/app.js
 projects/*/public/app.js.map
+projects/*/public/*-worker.js
+projects/*/public/*-worker.js.map
 projects/*/public/simulation.wasm
 projects/*/public/simulation.wasm.map
 projects/*/public/*.wasm

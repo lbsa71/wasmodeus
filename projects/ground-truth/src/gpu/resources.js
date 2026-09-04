@@ -4,7 +4,7 @@
  * the capacity slider moves.
  */
 import { COUNTERS_BYTES, counterIndex } from "../core/counters.js";
-import { PARAMS_BYTES, PARTICLE_STRIDE_BYTES } from "../core/layout.js";
+import { PARAMS_BYTES, PARTICLE_STRIDE_BYTES, STATE_BYTES } from "../core/layout.js";
 import { ringSize } from "../core/capacity.js";
 
 /** How many counter staging buffers to cycle through before stalling. */
@@ -30,12 +30,20 @@ export class SimulationResources {
     this.field = device.createBuffer({
       label: "field",
       size: this.cellCount * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     this.overlay = device.createBuffer({
       label: "overlay",
       size: this.cellCount * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    // Momentum handed to a cell by whatever struck it, two f16 to a word. It
+    // has to outlive the frame the impact happened in, because the cell is not
+    // released until the next `emit`.
+    this.impulse = device.createBuffer({
+      label: "impulse",
+      size: this.cellCount * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     this.counters = device.createBuffer({
       label: "counters",
@@ -43,6 +51,7 @@ export class SimulationResources {
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     /** @type {GPUBuffer|null} */ this.particles = null;
+    /** @type {GPUBuffer|null} */ this.states = null;
     /** @type {GPUBuffer|null} */ this.freeRing = null;
     /** @type {GPUBindGroup|null} */ this.computeBindGroup = null;
     /** @type {GPUBindGroup|null} */ this.compositeBindGroup = null;
@@ -59,18 +68,24 @@ export class SimulationResources {
    */
   allocatePool(capacity, computeLayout, compositeLayout) {
     this.particles?.destroy();
+    this.states?.destroy();
     this.freeRing?.destroy();
     this.capacity = capacity;
     this.ringSize = ringSize(capacity);
     this.particles = this.device.createBuffer({
       label: "particles",
       size: capacity * PARTICLE_STRIDE_BYTES,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    this.states = this.device.createBuffer({
+      label: "states",
+      size: capacity * STATE_BYTES,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     this.freeRing = this.device.createBuffer({
       label: "free-ring",
       size: this.ringSize * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     this.computeBindGroup = this.device.createBindGroup({
       layout: computeLayout,
@@ -81,6 +96,8 @@ export class SimulationResources {
         { binding: 3, resource: { buffer: this.overlay } },
         { binding: 4, resource: { buffer: this.freeRing } },
         { binding: 5, resource: { buffer: this.counters } },
+        { binding: 6, resource: { buffer: this.states } },
+        { binding: 7, resource: { buffer: this.impulse } },
       ],
     });
     this.compositeBindGroup = this.device.createBindGroup({
@@ -115,9 +132,11 @@ export class SimulationResources {
 
   destroy() {
     this.particles?.destroy();
+    this.states?.destroy();
     this.freeRing?.destroy();
     this.field.destroy();
     this.overlay.destroy();
+    this.impulse.destroy();
     this.counters.destroy();
     this.params.destroy();
     this.readback.destroy();
