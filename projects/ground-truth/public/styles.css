@@ -1,0 +1,119 @@
+:root {
+  color-scheme: dark;
+  --ink: #dbe6f5;
+  --dim: #8fa4c2;
+  --accent: #8ebaff;
+  --panel: #060a13cc;
+  --edge: #21344f;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #04060b;
+  color: var(--ink);
+  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+#world {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+#status {
+  position: fixed;
+  z-index: 1;
+  left: 1rem;
+  top: 1rem;
+  margin: 0;
+  color: var(--dim);
+}
+
+#status.error { color: #ff9d9d; max-width: 32rem; }
+
+#debug {
+  position: fixed;
+  z-index: 1;
+  right: 1rem;
+  top: 1rem;
+  min-width: 13rem;
+  padding: .75rem .85rem;
+  border: 1px solid var(--edge);
+  border-radius: .4rem;
+  background: var(--panel);
+  backdrop-filter: blur(3px);
+}
+
+#debug strong { color: var(--accent); letter-spacing: .08em; }
+
+#debug-rows {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: .1rem .75rem;
+  margin: .6rem 0 0;
+}
+
+#debug-rows dt { color: var(--dim); }
+#debug-rows dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+#debug-rows dd.warn { color: #ffc46b; }
+
+#controls {
+  position: fixed;
+  z-index: 1;
+  left: 1rem;
+  bottom: 1rem;
+  width: min(22rem, calc(100vw - 2rem));
+  padding: .75rem .85rem;
+  border: 1px solid var(--edge);
+  border-radius: .4rem;
+  background: var(--panel);
+  backdrop-filter: blur(3px);
+  display: grid;
+  gap: .55rem;
+}
+
+#controls label { display: block; color: var(--dim); }
+#controls output { float: right; color: var(--accent); font-variant-numeric: tabular-nums; }
+#controls input[type="range"] { display: block; width: 100%; margin-top: .3rem; accent-color: var(--accent); }
+
+#controls .row { display: flex; gap: .5rem; align-items: center; }
+
+#controls button,
+#controls .file {
+  flex: 1;
+  padding: .35rem .5rem;
+  border: 1px solid var(--edge);
+  border-radius: .25rem;
+  background: #0d1626;
+  color: var(--ink);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+
+#controls button:hover, #controls .file:hover { border-color: var(--accent); }
+#controls button[aria-pressed="true"] { color: var(--accent); }
+#controls .file input { display: none; }
+
+#hint {
+  position: fixed;
+  z-index: 1;
+  left: 50%;
+  bottom: 1rem;
+  transform: translateX(-50%);
+  margin: 0;
+  color: var(--dim);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@media (max-width: 40rem) {
+  #hint { display: none; }
+}

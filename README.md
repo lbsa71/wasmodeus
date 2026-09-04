@@ -4,7 +4,9 @@ WASMODEUS is now organized as a multi-project workspace.
 `projects/traffic-simulator` contains the existing traffic project, and
 `projects/space-colonization` contains the galaxy simulation. The
 `projects/starship-puzzler` workspace is a WebAssembly/WebGPU proof-of-fun
-prototype for deterministic orbital-route movement.
+prototype for deterministic orbital-route movement. `projects/ground-truth` is a
+WebGPU proof of concept in which a static image and a fixed pool of one million
+Newtonian pixels continuously trade places.
 
 Traffic version 1 remains a browser-based, WebGPU-first massive traffic
 simulator with a WebAssembly simulation core. Version 1 models a logical 1,000 ×
@@ -67,7 +69,10 @@ npm run build
 `projects/traffic-simulator` by default. Use `npm run build:traffic` or
 `npm run build:space-colonization` to target those workspaces directly. For
 Starship Puzzler, use `npm run build:starship-puzzler`,
-`npm run test:starship-puzzler`, or `npm run check:starship-puzzler`.
+`npm run test:starship-puzzler`, or `npm run check:starship-puzzler`. Ground
+Truth follows the same pattern: `npm run dev:ground-truth`,
+`npm run build:ground-truth`, `npm run test:ground-truth`, or
+`npm run check:ground-truth`.
 
 `npm test` runs the deterministic small-map JavaScript suite and is the fast
 default for local TDD. `npm run test:scale` compiles the AssemblyScript core and
@@ -216,4 +221,10 @@ projects/
     src/             Controller input, WASM adapter, and WebGPU renderer
     public/          Prototype 0 web entrypoint
     test*/           Unit and compiled-WASM acceptance tests
+  ground-truth/
+    src/core/        Pure simulation logic: cell encoding, integrator, servos
+    src/gpu/         Device, pipelines, buffers, and the WGSL compute passes
+    src/ui/          Debug counters and the frame-rate meter
+    public/          Web entrypoint
+    test/            Unit tests plus a shader/JavaScript layout contract test
 ```

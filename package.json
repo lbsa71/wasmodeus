@@ -9,21 +9,25 @@
   "description": "A multi-project simulation workspace.",
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "build:traffic": "npm run build --workspace @wasmodeus/traffic-simulator",
+    "build:ground-truth": "npm run build --workspace @wasmodeus/ground-truth",
     "build:space-colonization": "npm run build --workspace @wasmodeus/space-colonization",
     "build:starship-puzzler": "npm run build --workspace @wasmodeus/starship-puzzler",
+    "build:traffic": "npm run build --workspace @wasmodeus/traffic-simulator",
     "check": "npm run check --workspace @wasmodeus/traffic-simulator",
     "check:full": "npm run check:full --workspace @wasmodeus/traffic-simulator",
+    "check:ground-truth": "npm run check:full --workspace @wasmodeus/ground-truth",
     "check:starship-puzzler": "npm run check:full --workspace @wasmodeus/starship-puzzler",
     "dev": "npm run dev --workspace @wasmodeus/traffic-simulator",
+    "dev:ground-truth": "npm run dev --workspace @wasmodeus/ground-truth",
     "lint": "npm run lint --workspaces --if-present",
+    "start": "npm run dev --workspace @wasmodeus/traffic-simulator",
     "test": "npm run test:fast",
     "test:fast": "npm run test:fast --workspace @wasmodeus/traffic-simulator",
     "test:full": "npm run test:full --workspace @wasmodeus/traffic-simulator",
+    "test:ground-truth": "npm run test --workspace @wasmodeus/ground-truth",
     "test:scale": "npm run test:scale --workspace @wasmodeus/traffic-simulator",
     "test:starship-puzzler": "npm run test:full --workspace @wasmodeus/starship-puzzler",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "start": "npm run dev --workspace @wasmodeus/traffic-simulator"
+    "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
     "assemblyscript": "^0.28.0",

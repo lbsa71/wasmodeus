@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wasmodeus Ground Truth</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <canvas id="world" aria-label="Newtonian pixel simulation"></canvas>
+
+    <p id="status">Starting…</p>
+
+    <aside id="debug" aria-label="Simulation counters">
+      <strong>GROUND TRUTH</strong>
+      <dl id="debug-rows"></dl>
+    </aside>
+
+    <form id="controls" aria-label="Simulation controls">
+      <label for="capacity">
+        Pixels in motion <output id="capacity-value" for="capacity">—</output>
+        <input id="capacity" type="range" aria-label="Logarithmic pool size">
+      </label>
+      <label for="rest">
+        Rest frames <output id="rest-value" for="rest">2</output>
+        <input id="rest" type="range" step="1" aria-label="Frames a pixel may sit still before it settles">
+      </label>
+      <label for="fountain">
+        Fountain <output id="fountain-value" for="fountain">1.00×</output>
+        <input id="fountain" type="range" min="0" max="2" step="0.05" value="1" aria-label="Fountain intake rate">
+      </label>
+      <div class="row">
+        <button id="pause" type="button" aria-pressed="false">Pause</button>
+        <button id="reset" type="button">Reset</button>
+        <label class="file" for="image">Image…<input id="image" type="file" accept="image/*"></label>
+      </div>
+    </form>
+
+    <p id="hint">Click or drag on the image to knock pixels loose</p>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

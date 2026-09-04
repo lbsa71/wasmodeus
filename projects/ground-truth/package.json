@@ -1,0 +1,16 @@
+{
+  "name": "@wasmodeus/ground-truth",
+  "private": true,
+  "type": "module",
+  "description": "A WebGPU proof of concept where a static image and a fixed pool of Newtonian pixels trade places.",
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --format=esm --sourcemap --outfile=public/app.js --loader:.wgsl=text",
+    "dev": "npm run build && python -m http.server 4175 --directory public",
+    "lint": "eslint .",
+    "typecheck": "tsc --project jsconfig.json",
+    "test": "node --test \"test/*.test.js\"",
+    "test:full": "npm run test",
+    "check": "npm run lint && npm run typecheck && npm test",
+    "check:full": "npm run check && npm run build"
+  }
+}
