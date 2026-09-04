@@ -185,6 +185,20 @@ test("every dispatched pass exists in the shader with the expected workgroup siz
   }
 });
 
+test("only settle pushes to the free ring; everything else only pops", () => {
+  // The ring is safe because pushes and pops never mix within a dispatch, and
+  // every popper spends the budget `prepare` snapshotted. Lemmings pop too —
+  // digging and coming apart both take slots — so they must be pop-only as well.
+  const bodies = Object.fromEntries(
+    [...simulation.matchAll(/\nfn\s+(\w+)\([\s\S]*?\n\}/g)].map((match) => [match[1], match[0]]),
+  );
+  for (const pass of ["release_cell", "shatter"]) {
+    assert.doesNotMatch(bodies[pass], /counters\.tail/, `${pass} must not push to the ring`);
+    assert.match(bodies[pass], /atomicSub\(&counters\.pop_budget, 1\)/,
+      `${pass} must claim from the budget before popping`);
+  }
+});
+
 test("only settle pushes to the free ring and only emit pops from it", () => {
   // This is the whole reason a slot can never be handed to two pixels at once.
   const bodies = Object.fromEntries(
@@ -303,6 +317,18 @@ test("every wide pass unfolds a two-dimensional dispatch", () => {
   assert.equal(Number(declared), WORKGROUP_SIZE, "the shader's workgroup size must match layout.js");
 });
 
+test("a pixel checks what is under it one last time before settling", () => {
+  // "Has not changed cell" is not enough on its own. At the apex of an arc a
+  // pixel barely moves from one frame to the next, so without this it settles
+  // in mid-air — and a brushful of them reaching apex together forms a clump
+  // whose interior satisfies its own bond, which then hangs there for good.
+  const settle = simulation.match(/\nfn\s+settle\([\s\S]*?\n\}/)?.[0] ?? "";
+  const check = settle.indexOf("open_at(x, y - 1)");
+  const deposit = settle.indexOf("atomicCompareExchangeWeak");
+  assert.ok(check >= 0, "settle must look at the cell underneath");
+  assert.ok(check < deposit, "and it must look before it commits");
+});
+
 test("a pixel whose cell is taken is never launched", () => {
   // This was the bug behind visible pixels drifting upward through solid rock:
   // the loser of a race for a cell was given upward velocity and had collision
@@ -381,4 +407,45 @@ test("the pointer brush is a smudge unless it has no direction", () => {
   assert.match(smudgeable, /bond == 0u\) \{ return false/, "a smudge must not shift bedrock");
   assert.match(smudgeable, /support_count\(x, y\)\) - i32\(bond\) <= SMUDGE_REACH/,
     "and must only take material with little support to spare");
+});
+
+test("a lemming reads what hit it, not its own sprite", () => {
+  // Both live in the overlay, so without separate markers a lemming sees the
+  // body it drew last frame and shatters itself on the spot. The fast marker
+  // also carries the speed the overlay otherwise has no room for.
+  const struck = simulation.match(/\nfn\s+struck_by_debris\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.ok(struck, "struck_by_debris is missing from the shader");
+  assert.match(struck, /OVERLAY_FAST/, "it must look for the fast marker");
+  assert.doesNotMatch(struck, /OVERLAY_AGENT/, "and must ignore agent sprites");
+
+  const splat = simulation.match(/\nfn\s+splat\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(splat, /AGENT_SHATTER_SPEED[\s\S]*?OVERLAY_FAST/,
+    "splat must flag the cells a fast pixel is passing through");
+  const draw = simulation.match(/\nfn\s+draw_agents\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(draw, /OVERLAY_AGENT/, "and an agent must mark its own sprite");
+});
+
+test("lemmings draw on the same pool budget the world does", () => {
+  // Digging and detonating both pop free slots. `step_agents` runs before
+  // `emit`, so they compete for the budget `prepare` snapshotted rather than
+  // spending on top of it and overrunning the ring.
+  const passes = COMPUTE_PASSES;
+  assert.ok(passes.indexOf("step_agents") > passes.indexOf("settle"));
+  assert.ok(passes.indexOf("step_agents") < passes.indexOf("emit"));
+  // Drawing has to come after emit, which is what clears the overlay.
+  assert.ok(passes.indexOf("draw_agents") > passes.indexOf("emit"));
+  assert.ok(passes.indexOf("draw_agents") > passes.indexOf("splat"));
+
+  const release = simulation.match(/\nfn\s+release_cell\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(release, /atomicSub\(&counters\.pop_budget, 1\)/, "digging must claim a slot");
+  const shatter = simulation.match(/\nfn\s+shatter\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(shatter, /atomicSub\(&counters\.pop_budget, 1\)/, "and so must coming apart");
+});
+
+test("a lost lemming is replaced rather than simply gone", () => {
+  // Bombs kill the bomber and the debris takes its neighbours, so without a
+  // respawn the population only falls and the world goes quiet.
+  const step = simulation.match(/\nfn\s+step_agents\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(step, /AGENT_RESPAWN/, "death must leave a countdown");
+  assert.match(step, /waiting > 1u/, "which is ticked down");
 });

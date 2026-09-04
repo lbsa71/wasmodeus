@@ -23,7 +23,8 @@ import { RUBBLE_BOND } from "./palette.js";
  *   slideSpeed: number,
  *   brushRadius: number,
  *   blastStrength: number,
- *   smudgeStrength: number
+ *   smudgeStrength: number,
+ *   agents: { count: number, speed: number, bombChance: number, blastRadius: number }
  * }} Settings
  */
 
@@ -65,5 +66,8 @@ export function defaultSettings() {
     // is far gentler and needs a fraction of the speed.
     blastStrength: 700,
     smudgeStrength: 240,
+    // Lemmings: how many walk the world, how fast, how readily one sits down
+    // and lights a bomb, and how big a hole that leaves.
+    agents: { count: 600, speed: 26, bombChance: 0.12, blastRadius: 20 },
   };
 }

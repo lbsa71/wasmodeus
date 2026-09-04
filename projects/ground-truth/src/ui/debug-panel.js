@@ -33,6 +33,8 @@ export function debugRows(stats, context) {
     { label: "crowded/f", value: formatCount(stats.crowded) },
     // Walled in on all eight sides with nowhere to go. Should be near zero.
     { label: "stuck/f", value: formatCount(stats.stuck), warn: stats.stuck > 0 },
+    { label: "lemmings", value: formatCount(stats.walking) },
+    { label: "dug/f", value: formatCount(stats.dug) },
     { label: "rest frames", value: `${context.restThreshold}` },
     { label: "substeps", value: `${context.substeps}` },
     { label: "view", value: `${Math.round(context.camera.x)}, ${Math.round(context.camera.y)}` },

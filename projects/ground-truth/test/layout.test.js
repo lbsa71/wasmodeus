@@ -44,6 +44,8 @@ const PARAMS = {
   camera: { x: 2048, y: 1024, scale: 0.5 },
   rubbleBond: 5,
   drag: { x: 0.6, y: -0.8 },
+  agents: { count: 600, speed: 26, bombChance: 0.25, blastRadius: 22 },
+  frameSeconds: 1 / 60,
 };
 
 test("the params block is a whole number of 16-byte chunks", () => {

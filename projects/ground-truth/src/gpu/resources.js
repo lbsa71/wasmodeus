@@ -4,7 +4,7 @@
  * the capacity slider moves.
  */
 import { COUNTERS_BYTES, counterIndex } from "../core/counters.js";
-import { PARAMS_BYTES, PARTICLE_STRIDE_BYTES, STATE_BYTES } from "../core/layout.js";
+import { AGENT_CAPACITY, AGENT_STRIDE_BYTES, PARAMS_BYTES, PARTICLE_STRIDE_BYTES, STATE_BYTES } from "../core/layout.js";
 import { ringSize } from "../core/capacity.js";
 
 /** How many counter staging buffers to cycle through before stalling. */
@@ -43,6 +43,12 @@ export class SimulationResources {
     this.impulse = device.createBuffer({
       label: "impulse",
       size: this.cellCount * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    // Lemmings. Few enough that this is a rounding error next to the field.
+    this.agents = device.createBuffer({
+      label: "agents",
+      size: AGENT_CAPACITY * AGENT_STRIDE_BYTES,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     this.counters = device.createBuffer({
@@ -98,6 +104,7 @@ export class SimulationResources {
         { binding: 5, resource: { buffer: this.counters } },
         { binding: 6, resource: { buffer: this.states } },
         { binding: 7, resource: { buffer: this.impulse } },
+        { binding: 8, resource: { buffer: this.agents } },
       ],
     });
     this.compositeBindGroup = this.device.createBindGroup({
@@ -137,6 +144,7 @@ export class SimulationResources {
     this.field.destroy();
     this.overlay.destroy();
     this.impulse.destroy();
+    this.agents.destroy();
     this.counters.destroy();
     this.params.destroy();
     this.readback.destroy();

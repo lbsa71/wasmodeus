@@ -8,6 +8,7 @@ import {
   formatCount,
 } from "./core/capacity.js";
 import { MAX_REST_THRESHOLD, MIN_REST_THRESHOLD } from "./core/rest.js";
+import { AGENT_CAPACITY } from "./core/layout.js";
 import { FrameRateMeter, debugRows } from "./ui/debug-panel.js";
 
 const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector("#world"));
@@ -23,6 +24,8 @@ const bounceInput = /** @type {HTMLInputElement} */ (document.querySelector("#bo
 const bounceValue = /** @type {HTMLOutputElement} */ (document.querySelector("#bounce-value"));
 const blastInput = /** @type {HTMLInputElement} */ (document.querySelector("#blast"));
 const blastValue = /** @type {HTMLOutputElement} */ (document.querySelector("#blast-value"));
+const lemmingsInput = /** @type {HTMLInputElement} */ (document.querySelector("#lemmings"));
+const lemmingsValue = /** @type {HTMLOutputElement} */ (document.querySelector("#lemmings-value"));
 const pauseButton = /** @type {HTMLButtonElement} */ (document.querySelector("#pause"));
 const resetButton = /** @type {HTMLButtonElement} */ (document.querySelector("#reset"));
 const reseedButton = /** @type {HTMLButtonElement} */ (document.querySelector("#reseed"));
@@ -86,6 +89,9 @@ try {
   slumpValue.textContent = engine.settings.slumpChance.toFixed(2);
   bounceInput.value = `${engine.settings.restitution}`;
   bounceValue.textContent = engine.settings.restitution.toFixed(2);
+  lemmingsInput.max = `${AGENT_CAPACITY}`;
+  lemmingsInput.value = `${engine.settings.agents.count}`;
+  lemmingsValue.textContent = `${engine.settings.agents.count}`;
   blastInput.value = `${engine.settings.brushRadius}`;
   blastValue.textContent = `${engine.settings.brushRadius} px`;
 
@@ -113,6 +119,12 @@ try {
     engine.setBrushRadius(Number(blastInput.value));
     blastValue.textContent = `${engine.settings.brushRadius} px`;
   });
+  // Repopulating rewrites the whole agent buffer, so it waits for the release
+  // rather than firing on every pixel of slider travel.
+  lemmingsInput.addEventListener("input", () => {
+    lemmingsValue.textContent = `${lemmingsInput.value}`;
+  });
+  lemmingsInput.addEventListener("change", () => engine.populate(Number(lemmingsInput.value)));
   pauseButton.addEventListener("click", () => {
     engine.paused = !engine.paused;
     pauseButton.textContent = engine.paused ? "Resume" : "Pause";

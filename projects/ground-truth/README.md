@@ -65,6 +65,46 @@ applies.
 The **Flow** slider is how fluid released material looks, not whether it
 releases at all. That is the bond's job.
 
+## Lemmings
+
+Small creatures walk the world, tunnel through it, and occasionally sit down and
+light a bomb.
+
+They are not part of the field — sand does not rest on one — but they read it
+for every decision, so a tunnel one digs is a real tunnel and a floor blown out
+from under one really drops it. The walking rule is three lines and enough to
+follow the contour of a cave: nothing underfoot and it falls, whatever else it
+was doing; clear ahead and it walks on; one cell in the way and it steps up;
+anything taller and it turns round.
+
+**They come apart.** A lemming is drawn as a little block of pixels, and when
+something tears through it fast enough that block is released into the particle
+pool — the creature decoheres into its own pixels and they fall, pile and settle
+like anything else. It is the same bargain the rest of the simulation makes:
+hold together until something takes you apart.
+
+Digging and detonating both **pop free slots from the same pool budget the world
+uses**, which is why `step_agents` runs before `emit` rather than after. A
+lemming that cannot find a slot simply waits a frame.
+
+### Two markers in the overlay
+
+A lemming needs to know whether something is hitting it, and both the moving
+pixels and its own sprite live in the overlay. Without telling them apart it
+reads the body it drew last frame and shatters itself on the spot.
+
+So `splat` sets `OVERLAY_FAST` on cells a pixel is tearing through — the overlay
+has no room for a velocity, and this is the one bit of it that matters — and
+`draw_agents` sets `OVERLAY_AGENT` on its own sprite. Both sit above the colour
+bits, so `atomicMax` keeps a fast pixel visible over a lemming and a lemming
+over ordinary material, and the composite masks them off.
+
+Lost lemmings are replaced after a delay. Without that the population only ever
+falls — a bomb kills the bomber and the debris takes its neighbours — and the
+world goes quiet inside half a minute. Measured over 1 700 frames it holds
+steady: 600 spawned, 534 alive after 500 frames, 540 after 1 700, with around a
+hundred digging at any moment and forty-five cells excavated a frame.
+
 ## The brush
 
 A **smudge** is the better tool, and not merely because it is gentler.
@@ -117,11 +157,17 @@ tucked underneath existing material.
 
 ## The other rules
 
-**A pixel settles when it stops moving.** Rest is measured in whole cells, not
-in velocity: a pixel that has not changed grid cell for `rest` consecutive
-frames is written back into `field` and its slot returns to the pool. A pixel at
-the apex of a ballistic arc is exempt — two frames in the sky would otherwise
-look identical to two frames sitting still.
+**A pixel settles when it stops moving, on something.** Rest is measured in
+whole cells, not in velocity: a pixel that has not changed grid cell for `rest`
+consecutive frames is written back into `field` and its slot returns to the pool.
+
+Both halves of that are needed. A pixel above the world is exempt, or a
+ballistic apex would look identical to sitting still — and `settle` takes one
+last look at the cell underneath before committing, because at the apex of an
+arc *inside* the world a pixel barely moves from one frame to the next. Without
+that check it settles in mid-air, and a brushful of pixels reaching apex
+together forms a clump whose interior satisfies its own bond, which then hangs
+there permanently. Smudging straight upward produced exactly that.
 
 **Impacts hand over momentum.** A pixel that strikes a cell hard enough gives it
 part of its momentum as a vector, and the cell launches with exactly that when
@@ -277,6 +323,8 @@ Requires a browser with WebGPU.
 | `denied/f` | cells that wanted to move and found the pool full |
 | `crowded/f` | two pixels wanting one cell; normal during a collapse |
 | `stuck/f` | pixels with no free cell within reach, widening their search |
+| `lemmings` | how many are alive and walking |
+| `dug/f` | cells excavated by lemmings this frame |
 | `view` / `zoom` | where the camera is and how far in |
 
 ## Layout
@@ -293,11 +341,12 @@ Requires a browser with WebGPU.
 ## Frame order, and why it is that order
 
 ```
-prepare  →  integrate ×4  →  advance  →  settle  →  emit  →  splat  →  composite
+prepare  →  integrate ×4  →  advance  →  settle  →  step_agents
+         →  emit  →  splat  →  draw_agents  →  composite
 ```
 
-`settle` only ever **pushes** to the free-slot ring and `emit` only ever
-**pops** from it. Because they are separate dispatches, a slot can never be
+`settle` only ever **pushes** to the free-slot ring; `emit` and `step_agents`
+only ever **pop** from it. Because they are separate dispatches, a slot can never be
 handed to two pixels at once — no compare-and-swap on the ring is needed. `emit`
 claims from a pop budget snapshotted by `prepare`, so its head index can never
 overrun the tail.

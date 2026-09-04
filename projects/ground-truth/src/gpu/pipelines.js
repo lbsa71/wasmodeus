@@ -31,6 +31,7 @@ export function createPipelines(device, format) {
       { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
       { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
       { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+      { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
     ],
   });
   const compositeLayout = device.createBindGroupLayout({

@@ -7,11 +7,13 @@
  * the world if a slot is free, and a slot only frees when a pixel comes to rest
  * and blends back in.
  */
-import { decodeCounters } from "./core/counters.js";
-import { PARAMS_BYTES, dispatchGrid, maxCapacityFor, writeParams } from "./core/layout.js";
+import { COUNTERS_BYTES, decodeCounters } from "./core/counters.js";
+import { AGENT_CAPACITY, AGENT_STRIDE_BYTES, PARAMS_BYTES, dispatchGrid, maxCapacityFor, writeParams } from "./core/layout.js";
 import { ringMask } from "./core/capacity.js";
 import { clampRestThreshold } from "./core/rest.js";
 import { clampRestitution } from "./core/collision.js";
+import { MODE_WALK, packAgent, timerFor } from "./core/agents.js";
+import { hashU32 } from "./core/prng.js";
 import { defaultSettings } from "./core/settings.js";
 import { clampCamera, createCamera, panCamera, worldFromScreen, zoomCameraAt } from "./core/camera.js";
 import { acquireDevice } from "./gpu/device.js";
@@ -58,7 +60,7 @@ export class GroundTruthEngine {
     this.sourceField = null;
     this.resources = new SimulationResources(device, settings.world);
     this.settings.capacity = Math.min(settings.capacity, maxCapacityFor(device.limits));
-    this.stats = decodeCounters(new Uint32Array(12), this.settings.capacity);
+    this.stats = decodeCounters(new Uint32Array(COUNTERS_BYTES / 4), this.settings.capacity);
     // Start looking at the surface, which is where the interesting boundary
     // between sky, soil and rock is.
     this.camera = createCamera(settings.world, this.viewport, {
@@ -129,7 +131,8 @@ export class GroundTruthEngine {
     pass.dispatchWorkgroups(cells.x, cells.y);
     pass.end();
     this.device.queue.submit([encoder.finish()]);
-    this.stats = decodeCounters(new Uint32Array(12), capacity);
+    if (this.sourceField) this.populate();
+    this.stats = decodeCounters(new Uint32Array(COUNTERS_BYTES / 4), capacity);
   }
 
   /** @param {number} threshold frames a pixel may sit still before settling */
@@ -151,6 +154,32 @@ export class GroundTruthEngine {
    */
   setRestitution(restitution) {
     this.settings.restitution = clampRestitution(restitution);
+  }
+
+  /**
+   * Scatters lemmings across the surface of the world. They fall to whatever is
+   * under them, so the exact drop height does not matter.
+   *
+   * @param {number} [count]
+   */
+  populate(count = this.settings.agents.count) {
+    const { width, height } = this.settings.world;
+    this.settings.agents.count = Math.max(0, Math.min(AGENT_CAPACITY, Math.round(count)));
+    const data = new ArrayBuffer(Math.max(1, this.settings.agents.count) * AGENT_STRIDE_BYTES);
+    const floats = new Float32Array(data);
+    const words = new Uint32Array(data);
+    const stride = AGENT_STRIDE_BYTES / 4;
+    for (let i = 0; i < this.settings.agents.count; i += 1) {
+      floats[i * stride] = ((i + 0.5) / this.settings.agents.count) * width;
+      floats[i * stride + 1] = height * 0.95;
+      words[i * stride + 4] = packAgent({
+        alive: true,
+        mode: MODE_WALK,
+        facing: i % 2 === 0 ? 1 : -1,
+        timer: timerFor(hashU32(i), 30, 150),
+      });
+    }
+    this.device.queue.writeBuffer(this.resources.agents, 0, data);
   }
 
   /** @param {number} radius world pixels */
@@ -234,12 +263,22 @@ export class GroundTruthEngine {
       compute.dispatchWorkgroups(pool.x, pool.y);
       compute.setPipeline(this.pipelines.compute.settle);
       compute.dispatchWorkgroups(pool.x, pool.y);
+      // Lemmings go before `emit` so that digging and detonating draw on the
+      // same pool budget the world does, rather than on top of it. They read
+      // the overlay for what hit them, which at this point still holds the
+      // previous frame's pixels — a frame stale, and plenty.
+      const agents = dispatchGrid(this.settings.agents.count, this.maxWorkgroups);
+      compute.setPipeline(this.pipelines.compute.step_agents);
+      compute.dispatchWorkgroups(agents.x, agents.y);
       compute.setPipeline(this.pipelines.compute.emit);
       compute.dispatchWorkgroups(cells.x, cells.y);
-      // Splat last, and only when emit has run: emit is what clears the
-      // overlay, so splatting without it would draw over stale pixels.
+      // Splat only once emit has run: emit is what clears the overlay, so
+      // splatting without it would draw over stale pixels.
       compute.setPipeline(this.pipelines.compute.splat);
       compute.dispatchWorkgroups(pool.x, pool.y);
+      // Lemmings are drawn last, over the pixels.
+      compute.setPipeline(this.pipelines.compute.draw_agents);
+      compute.dispatchWorkgroups(agents.x, agents.y);
     }
     compute.end();
 
@@ -306,6 +345,8 @@ export class GroundTruthEngine {
       camera: this.camera,
       rubbleBond: settings.rubbleBond,
       drag: this.drag,
+      agents: settings.agents,
+      frameSeconds: settings.frameSeconds,
     });
     this.device.queue.writeBuffer(this.resources.params, 0, this.paramsData);
   }

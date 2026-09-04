@@ -36,8 +36,8 @@ export const STATE_REST_MASK = 0xe0000000;
 /** Three bits of rest, so a pixel may sit still at most this many frames. */
 export const MAX_REST = 7;
 
-/** `Params` runs to word 27, which is already a 16-byte multiple. */
-export const PARAMS_BYTES = 112;
+/** `Params` runs to word 32 and rounds up to the struct's 16-byte alignment. */
+export const PARAMS_BYTES = 144;
 
 /** Word indices into the `Params` uniform. `U_` is `u32`, `F_` is `f32`. */
 export const U_WORLD_X = 0;
@@ -68,6 +68,11 @@ export const U_RUBBLE_BOND = 25;
 // `brush_drag: vec2f` needs 8-byte alignment, which word 26 already satisfies.
 export const F_DRAG_X = 26;
 export const F_DRAG_Y = 27;
+export const U_AGENT_COUNT = 28;
+export const F_AGENT_SPEED = 29;
+export const F_AGENT_BOMB_CHANCE = 30;
+export const F_AGENT_BLAST = 31;
+export const F_FRAME_SECONDS = 32;
 
 /**
  * @typedef {{
@@ -80,7 +85,9 @@ export const F_DRAG_Y = 27;
  *   viewport: { width: number, height: number },
  *   camera: { x: number, y: number, scale: number },
  *   rubbleBond: number,
- *   drag: { x: number, y: number }
+ *   drag: { x: number, y: number },
+ *   agents: { count: number, speed: number, bombChance: number, blastRadius: number },
+ *   frameSeconds: number
  * }} SimulationParams
  */
 
@@ -122,6 +129,11 @@ export function writeParams(target, params) {
   u[U_RUBBLE_BOND] = params.rubbleBond;
   f[F_DRAG_X] = params.drag.x;
   f[F_DRAG_Y] = params.drag.y;
+  u[U_AGENT_COUNT] = params.agents.count;
+  f[F_AGENT_SPEED] = params.agents.speed;
+  f[F_AGENT_BOMB_CHANCE] = params.agents.bombChance;
+  f[F_AGENT_BLAST] = params.agents.blastRadius;
+  f[F_FRAME_SECONDS] = params.frameSeconds;
   return target;
 }
 
@@ -145,7 +157,13 @@ export const WORKGROUP_SIZE = 256;
  * Compute entry points, in dispatch order. `integrate` runs once per physics
  * substep; every other pass runs once per rendered frame.
  */
-export const COMPUTE_PASSES = ["prepare", "integrate", "advance", "settle", "emit", "splat"];
+export const COMPUTE_PASSES = [
+  "prepare", "integrate", "advance", "settle", "step_agents", "emit", "splat", "draw_agents",
+];
+/** Bytes per lemming: position, velocity and a packed state word. */
+export const AGENT_STRIDE_BYTES = 20;
+/** Most lemmings the buffer holds. A rounding error next to the field. */
+export const AGENT_CAPACITY = 4096;
 
 /**
  * @param {number} items

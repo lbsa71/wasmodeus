@@ -27,6 +27,11 @@ struct Params {
   // Which way the pointer is being dragged, or zero for a radial blast. The
   // brush position, radius and strength live in `blast`.
   brush_drag: vec2f,
+  agent_count: u32,
+  agent_speed: f32,
+  agent_bomb_chance: f32,
+  agent_blast: f32,
+  frame_seconds: f32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;

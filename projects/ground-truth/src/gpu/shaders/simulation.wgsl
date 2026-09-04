@@ -53,6 +53,34 @@ const IMPACT_RESISTANCE: f32 = 0.6;
 const SMUDGE_REACH: i32 = 3;
 // Fraction of blast speed still given to debris at the very rim.
 const BLAST_RIM: f32 = 0.25;
+// Lemmings. See `src/core/agents.js` for the rules these mirror.
+const MODE_WALK: u32 = 0u;
+const MODE_DIG: u32  = 1u;
+const MODE_FUSE: u32 = 2u;
+const AGENT_TIMER_MASK: u32 = 0x000000ffu;
+const AGENT_FACING_BIT: u32 = 0x00000100u;
+const AGENT_MODE_SHIFT: u32 = 9u;
+const AGENT_MODE_MASK: u32  = 0x00000600u;
+const AGENT_ALIVE_BIT: u32  = 0x00000800u;
+// Half-width and height of the block a lemming is drawn as, and comes apart to.
+const AGENT_HALF_W: i32 = 1;
+const AGENT_HEIGHT: i32 = 4;
+// Speed a pixel must be doing to knock one apart.
+const AGENT_SHATTER_SPEED: f32 = 240.0;
+// Frames before a lost lemming is replaced. Without this the population only
+// ever falls — bombs kill the bomber and the debris takes the neighbours — and
+// the world goes quiet after half a minute.
+const AGENT_RESPAWN: u32 = 150u;
+
+// Two markers the overlay carries above its colour. `splat` flags a cell a
+// pixel is tearing through, so a lemming can tell a hurtling rock from settling
+// sand; `draw_agents` flags its own sprite, so a lemming does not read its own
+// body as something hitting it. Both sit above the colour bits, so atomicMax
+// keeps a fast pixel visible over an agent and an agent over ordinary material,
+// and the composite masks them off.
+const OVERLAY_FAST: u32  = 0x40000000u;
+const OVERLAY_AGENT: u32 = 0x20000000u;
+
 // Must match WORKGROUP_SIZE in src/core/layout.js.
 const WORKGROUP_SIZE: u32 = 256u;
 
@@ -77,6 +105,12 @@ struct Params {
   // Which way the pointer is being dragged, or zero for a radial blast. The
   // brush position, radius and strength live in `blast`.
   brush_drag: vec2f,
+  agent_count: u32,
+  agent_speed: f32,
+  agent_bomb_chance: f32,
+  agent_blast: f32,
+  // Agents step once a frame, not once a substep, so they need the whole tick.
+  frame_seconds: f32,
 };
 
 // Scalars, not vec2f: a vec2f would align this to eight bytes and pad it to 24.
@@ -87,6 +121,14 @@ struct Particle {
   vel_x: f32,
   vel_y: f32,
   last_cell: u32,
+};
+
+struct Agent {
+  pos_x: f32,
+  pos_y: f32,
+  vel_x: f32,
+  vel_y: f32,
+  state: u32,
 };
 
 struct Counters {
@@ -100,6 +142,8 @@ struct Counters {
   denied: atomic<u32>,
   crowded: atomic<u32>,
   stuck: atomic<u32>,
+  walking: atomic<u32>,
+  dug: atomic<u32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -112,6 +156,7 @@ struct Counters {
 // Momentum handed to a cell by whatever struck it, waiting for `emit` to launch
 // it with. Two f16 packed into a word; non-zero only while DISLODGE_BIT is set.
 @group(0) @binding(7) var<storage, read_write> impulse: array<atomic<u32>>;
+@group(0) @binding(8) var<storage, read_write> agents: array<Agent>;
 
 // A dispatch wider than 65535 workgroups is illegal, so large grids are folded
 // into two dimensions and unfolded here. See `dispatchGrid` in core/layout.js.
@@ -335,6 +380,8 @@ fn prepare() {
   atomicStore(&counters.denied, 0u);
   atomicStore(&counters.crowded, 0u);
   atomicStore(&counters.stuck, 0u);
+  atomicStore(&counters.walking, 0u);
+  atomicStore(&counters.dug, 0u);
 }
 
 @compute @workgroup_size(256)
@@ -470,6 +517,20 @@ fn settle(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) gr
     return;
   }
 
+  let x = i32(p.last_cell % params.world.x);
+  let y = i32(p.last_cell / params.world.x);
+  // One last look at what is underneath before committing. A pixel comes to
+  // rest *on* something, and "has not changed cell" is not enough on its own:
+  // at the apex of an arc a pixel barely moves from one frame to the next, so
+  // it would settle in mid-air. Several arriving together then form a clump
+  // whose interior satisfies its own bond, and the clump hangs there for good.
+  // Smudging upward launches a whole brushful of pixels that reach their apex
+  // at the same moment, which is why it froze them in the sky.
+  if (open_at(x, y - 1)) {
+    states[i] = with_rest(state, 0u);
+    return;
+  }
+
   // Anything that has been airborne comes back down as rubble: blasted stone
   // does not re-freeze into cliff face that holds a ceiling up again.
   let deposit = ((state & MATERIAL_MASK) & ~BOND_MASK)
@@ -494,8 +555,6 @@ fn settle(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) gr
     // screen rising through solid rock — and sinking back down through it once
     // gravity turned them round.
     atomicAdd(&counters.crowded, 1u);
-    let x = i32(p.last_cell % params.world.x);
-    let y = i32(p.last_cell / params.world.x);
     let bias = select(-1, 1, rand01(i ^ params.frame) < 0.5);
     // One further ring each frame, advancing, so a pixel with no space close by
     // sweeps outward over about half a second rather than searching the whole
@@ -638,7 +697,209 @@ fn splat(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) gro
   // A buried pixel is inside solid material, and the field already draws that
   // cell. Drawing the pixel too would show something moving through rock.
   if (!open_at(x, y)) { return; }
-  atomicMax(&overlay[cell_index(x, y)], (state & COLOR_MASK) | OCCUPIED_BIT);
+  var mark = (state & COLOR_MASK) | OCCUPIED_BIT;
+  // Flag the cell if this pixel is moving fast enough to break a lemming.
+  if (length(vec2f(p.vel_x, p.vel_y)) >= AGENT_SHATTER_SPEED) { mark |= OVERLAY_FAST; }
+  atomicMax(&overlay[cell_index(x, y)], mark);
+}
+
+// Whether anything is tearing through the block a lemming occupies. Reads the
+// overlay, which at this point in the frame still holds the previous frame's
+// moving pixels — a frame stale, which is plenty for "is something hitting me".
+fn struck_by_debris(x: i32, y: i32) -> bool {
+  for (var dy = 0; dy < AGENT_HEIGHT; dy += 1) {
+    for (var dx = -AGENT_HALF_W; dx <= AGENT_HALF_W; dx += 1) {
+      if (!in_bounds(x + dx, y + dy)) { continue; }
+      if ((atomicLoad(&overlay[cell_index(x + dx, y + dy)]) & OVERLAY_FAST) != 0u) { return true; }
+    }
+  }
+  return false;
+}
+
+// Releases one cell into the pool with a velocity. Returns whether a slot was
+// free; a lemming that cannot dig this frame simply waits.
+fn release_cell(x: i32, y: i32, vel: vec2f) -> bool {
+  if (!in_bounds(x, y)) { return false; }
+  let c = cell_index(x, y);
+  let value = atomicLoad(&field[c]);
+  if (value == 0u || bond_of(value) == 0u) { return false; }
+  let budget = atomicSub(&counters.pop_budget, 1);
+  if (budget <= 0) { return false; }
+  let slot = free_ring[atomicAdd(&counters.head, 1u) & params.ring_mask];
+  atomicStore(&field[c], 0u);
+  particles[slot] = Particle(f32(x) + 0.5, f32(y) + 0.5, vel.x, vel.y, SKY_CELL);
+  states[slot] = (value & MATERIAL_MASK) | STATE_ALIVE_BIT;
+  atomicAdd(&counters.emitted, 1u);
+  return true;
+}
+
+// A lemming coming apart into its own pixels. Its body is not part of the
+// field, so this is the one place matter enters the world; the amount is
+// bounded by the number of lemmings times the size of the block.
+fn shatter(index: u32, x: i32, y: i32, colour: u32) {
+  for (var dy = 0; dy < AGENT_HEIGHT; dy += 1) {
+    for (var dx = -AGENT_HALF_W; dx <= AGENT_HALF_W; dx += 1) {
+      let budget = atomicSub(&counters.pop_budget, 1);
+      if (budget <= 0) { return; }
+      let slot = free_ring[atomicAdd(&counters.head, 1u) & params.ring_mask];
+      let seed = hash_u32(index * 7919u + u32((dy + 1) * 8 + dx + 4));
+      particles[slot] = Particle(
+        f32(x + dx) + 0.5, f32(y + dy) + 0.5,
+        (rand01(seed) - 0.5) * 200.0, 60.0 + rand01(seed ^ 0x51u) * 140.0,
+        SKY_CELL,
+      );
+      states[slot] = (colour & COLOR_MASK) | (params.rubble_bond << BOND_SHIFT) | STATE_ALIVE_BIT;
+      atomicAdd(&counters.emitted, 1u);
+    }
+  }
+}
+
+// Walks the lemmings, and lets them dig and detonate. One thread apiece, and
+// there are few of them, so this is the cheapest pass in the frame.
+//
+// It runs before `emit` so a lemming digging or blowing up competes for free
+// slots on the same budget the world does, rather than on top of it.
+@compute @workgroup_size(256)
+fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let i = linear_index(gid, groups);
+  if (i >= params.agent_count) { return; }
+  var a = agents[i];
+  if ((a.state & AGENT_ALIVE_BIT) == 0u) {
+    // Gone, and counting down to a replacement. The timer bits are reused: a
+    // dead slot has no mode or facing to remember.
+    let waiting = a.state & AGENT_TIMER_MASK;
+    if (waiting > 1u) {
+      agents[i] = Agent(a.pos_x, a.pos_y, 0.0, 0.0, waiting - 1u);
+      return;
+    }
+    let born = hash_u32(i * 40503u + params.frame);
+    var packed = AGENT_ALIVE_BIT | (MODE_WALK << AGENT_MODE_SHIFT) | (40u + (born % 140u));
+    if ((born & 1u) == 1u) { packed |= AGENT_FACING_BIT; }
+    agents[i] = Agent(
+      rand01(born ^ 0x77u) * f32(params.world.x),
+      f32(params.world.y) * 0.97,
+      0.0, 0.0, packed,
+    );
+    return;
+  }
+
+  let x = i32(floor(a.pos_x));
+  let y = i32(floor(a.pos_y));
+  let colour = 0x00e8d0u;
+
+  // Anything hurtling through takes it apart: the same bargain the rest of the
+  // world makes, hold together until something hits hard enough.
+  if (struck_by_debris(x, y)) {
+    shatter(i, x, y, colour);
+    agents[i] = Agent(a.pos_x, a.pos_y, 0.0, 0.0,
+      AGENT_RESPAWN + (hash_u32(i ^ params.frame) % 100u));
+    return;
+  }
+
+  atomicAdd(&counters.walking, 1u);
+  var timer = a.state & AGENT_TIMER_MASK;
+  var mode = (a.state & AGENT_MODE_MASK) >> AGENT_MODE_SHIFT;
+  var facing = -1;
+  if ((a.state & AGENT_FACING_BIT) != 0u) { facing = 1; }
+  let seed = hash_u32(i * 2654435761u + params.frame);
+
+  // Nothing underfoot beats everything else: a lemming whose floor has been dug
+  // away or blown out falls, whatever it was doing.
+  if (!blocked_at(x, y - 1)) {
+    a.vel_y -= params.gravity * params.frame_seconds;
+    let next = a.pos_y + a.vel_y * params.frame_seconds;
+    if (blocked_at(x, i32(floor(next)))) {
+      a.vel_y = 0.0;
+    } else {
+      a.pos_y = clamp(next, 0.0, f32(params.world.y) - EDGE_EPSILON);
+    }
+    agents[i] = Agent(a.pos_x, a.pos_y, 0.0, a.vel_y, a.state);
+    return;
+  }
+  a.vel_y = 0.0;
+
+  if (mode == MODE_FUSE && timer <= 1u) {
+    // The bomb. Everything within the radius leaves with momentum pointing
+    // away, and the lemming goes with it.
+    let r = i32(params.agent_blast);
+    for (var dy = -r; dy <= r; dy += 1) {
+      for (var dx = -r; dx <= r; dx += 1) {
+        let d = sqrt(f32(dx * dx + dy * dy));
+        if (d > f32(r)) { continue; }
+        let away = vec2f(f32(dx), f32(dy)) / max(d, 1.0);
+        release_cell(x + dx, y + dy, away * params.blast.w * (1.0 - d / f32(r)) * 0.5);
+      }
+    }
+    shatter(i, x, y, colour);
+    agents[i] = Agent(a.pos_x, a.pos_y, 0.0, 0.0,
+      AGENT_RESPAWN + (hash_u32(i ^ params.frame) % 100u));
+    return;
+  }
+
+  if (mode == MODE_DIG) {
+    // Chews the cell ahead and the one above it, so the tunnel is tall enough
+    // to walk back through.
+    let low = release_cell(x + facing, y, vec2f(f32(facing) * 40.0, 10.0));
+    let high = release_cell(x + facing, y + 1, vec2f(f32(facing) * 40.0, 30.0));
+    if (low || high) { atomicAdd(&counters.dug, 1u); }
+    if (low) {
+      a.pos_x = clamp(a.pos_x + f32(facing) * 0.7, 0.0, f32(params.world.x) - EDGE_EPSILON);
+    }
+  } else {
+    // Walking. Clear ahead and it walks on; a single cell in the way and it
+    // steps up; anything taller and it turns round.
+    let ahead = blocked_at(x + facing, y);
+    if (!ahead) {
+      a.pos_x = clamp(a.pos_x + f32(facing) * params.agent_speed * params.frame_seconds,
+        0.0, f32(params.world.x) - EDGE_EPSILON);
+    } else if (!blocked_at(x + facing, y + 1)) {
+      a.pos_x = clamp(a.pos_x + f32(facing) * 0.6, 0.0, f32(params.world.x) - EDGE_EPSILON);
+      a.pos_y = clamp(a.pos_y + 1.0, 0.0, f32(params.world.y) - EDGE_EPSILON);
+    } else {
+      facing = -facing;
+    }
+  }
+
+  if (timer > 1u) {
+    timer -= 1u;
+  } else if (mode != MODE_WALK) {
+    mode = MODE_WALK;
+    timer = 60u + (seed % 120u);
+  } else if (rand01(seed ^ 0x2f1cu) < params.agent_bomb_chance) {
+    mode = MODE_FUSE;
+    timer = 70u + (seed % 90u);
+  } else {
+    mode = MODE_DIG;
+    timer = 25u + (seed % 70u);
+  }
+
+  var packed = AGENT_ALIVE_BIT | (mode << AGENT_MODE_SHIFT) | timer;
+  if (facing > 0) { packed |= AGENT_FACING_BIT; }
+  agents[i] = Agent(a.pos_x, a.pos_y, 0.0, 0.0, packed);
+}
+
+// Draws the lemmings, after `emit` has cleared the overlay and `splat` has
+// filled it with this frame's moving pixels.
+@compute @workgroup_size(256)
+fn draw_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let i = linear_index(gid, groups);
+  if (i >= params.agent_count) { return; }
+  let a = agents[i];
+  if ((a.state & AGENT_ALIVE_BIT) == 0u) { return; }
+  // A lit fuse blinks, faster as it runs down, so you can see one coming.
+  var colour = 0x00e8d0u;
+  if (((a.state & AGENT_MODE_MASK) >> AGENT_MODE_SHIFT) == MODE_FUSE) {
+    let timer = a.state & AGENT_TIMER_MASK;
+    if (((params.frame / (timer / 10u + 1u)) & 1u) == 0u) { colour = 0x3040ffu; }
+  }
+  let x = i32(floor(a.pos_x));
+  let y = i32(floor(a.pos_y));
+  for (var dy = 0; dy < AGENT_HEIGHT; dy += 1) {
+    for (var dx = -AGENT_HALF_W; dx <= AGENT_HALF_W; dx += 1) {
+      if (!in_bounds(x + dx, y + dy)) { continue; }
+      atomicMax(&overlay[cell_index(x + dx, y + dy)], colour | OCCUPIED_BIT | OVERLAY_AGENT);
+    }
+  }
 }
 
 // Clears stored momentum across the grid. Only needed on reset: in steady state
