@@ -8,7 +8,7 @@
  *
  * All of it is a pure function of the seed.
  */
-import { cellBond, isOccupied, packCell, withBond } from "./field-format.js";
+import { WATER_BOND, cellBond, isOccupied, packCell, withBond } from "./field-format.js";
 import { cellIndex } from "./geometry.js";
 import { neighbourSupport } from "./sand.js";
 import { MATERIALS } from "./palette.js";
@@ -151,7 +151,7 @@ export function createCaveWorld({ width, height, seed = 1 }) {
       let material = deep ? MATERIALS.deepStone : MATERIALS.stone;
       if (!deep && shade > 0.62) material = MATERIALS.paleStone;
       if (loose > 0.70) material = MATERIALS.gravel;
-      else if (ore > 0.845) material = deep ? MATERIALS.crystal : MATERIALS.ore;
+      else if (ore > 0.845) material = deep ? MATERIALS.water : MATERIALS.ore;
       paint(field, index, material, index * 2654435761);
     }
   }
@@ -323,6 +323,10 @@ export function settleBonds(field, { width, height }) {
       if (!isOccupied(word)) continue;
       const bond = cellBond(word);
       if (bond === 0) continue;
+      // Water is never pinned down. Lowering its bond to the support it happens
+      // to have would turn a buried seam into ordinary rock, and it would never
+      // flow when something opened it up.
+      if (bond === WATER_BOND) continue;
       // Read support from the untouched copy so the pass does not depend on
       // the order cells happen to be visited in.
       const { total } = neighbourSupport(field, x, y, { width, height });

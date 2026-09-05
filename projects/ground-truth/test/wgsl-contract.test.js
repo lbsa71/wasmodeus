@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { BOND_MASK, BOND_SHIFT, COLOR_MASK, DISLODGE_BIT, MATERIAL_MASK, OCCUPIED_BIT } from "../src/core/field-format.js";
+import { BOND_MASK, BOND_SHIFT, COLOR_MASK, DISLODGE_BIT, MATERIAL_MASK, OCCUPIED_BIT, WATER_BOND } from "../src/core/field-format.js";
 import { SKY_CELL } from "../src/core/geometry.js";
 import { SUPPORT_FALL, SUPPORT_FIRM, SUPPORT_SLUMP } from "../src/core/sand.js";
 import {
@@ -199,6 +199,21 @@ test("only settle pushes to the free ring; everything else only pops", () => {
   }
 });
 
+/**
+ * The shader's whole definition of one function, from its `fn` to the closing
+ * brace in column zero.
+ *
+ * @param {string} name @returns {string}
+ */
+function body(name) {
+  const start = simulation.indexOf(`
+fn ${name}(`);
+  if (start < 0) return "";
+  const end = simulation.indexOf(`
+}`, start);
+  return end < 0 ? "" : simulation.slice(start, end + 2);
+}
+
 test("only settle pushes to the free ring and only emit pops from it", () => {
   // This is the whole reason a slot can never be handed to two pixels at once.
   const bodies = Object.fromEntries(
@@ -224,13 +239,96 @@ test("the shader agrees with sand.js on what the three support cases are", () =>
   }
 });
 
-test("a pixel settles as rubble, whatever bond it started with", () => {
+test("a pixel settles as rubble, unless it is water", () => {
   // Blasted stone must not re-freeze into cliff face that holds a ceiling up,
-  // so `settle` overwrites the bond it carried with the rubble bond.
+  // so `settle` overwrites the bond it carried with the rubble bond. Water has
+  // to be the exception: settle a drop as rubble and it turns to sand the first
+  // time it lands, so a river would silt up into a sandbank.
   const settle = simulation.match(/\nfn\s+settle\([\s\S]*?\n\}/)?.[0] ?? "";
   assert.ok(settle, "settle is missing from the shader");
   assert.match(settle, /&\s*~BOND_MASK/, "the carried bond must be cleared");
-  assert.match(settle, /params\.rubble_bond << BOND_SHIFT/, "and replaced with the rubble bond");
+  assert.match(settle, /landed_bond << BOND_SHIFT/, "and replaced deliberately");
+  assert.match(settle, /var landed_bond = params\.rubble_bond;/);
+  assert.match(settle, /if \(is_water\(state\)\) \{ landed_bond = WATER_BOND; \}/,
+    "water must settle as water");
+});
+
+test("water is held by nothing, and knows where to go on its own", () => {
+  // A bond of fifteen cannot be met by eight neighbours, so every existing
+  // "is this held?" already answers no for water. Only the direction is new,
+  // and the flat sideways step is what separates it from sand.
+  const bond = Number(simulation.match(/const\s+WATER_BOND\s*:\s*u32\s*=\s*(\d+)u/)?.[1]);
+  assert.equal(bond, WATER_BOND);
+  assert.ok(bond > 8, "eight neighbours must never be able to satisfy it");
+
+  const flow = simulation.match(/\nfn\s+water_flow\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.ok(flow, "water_flow is missing from the shader");
+  assert.match(flow, /open_at\(x, y - 1\)[\s\S]*?return vec2i\(0, -1\)/, "down first");
+  assert.match(flow, /open_at\(x - 1, y\)/, "then flat sideways, which sand never does");
+  assert.match(flow, /return vec2i\(0, 0\)/, "and it must be able to stop, or a pool churns for ever");
+
+  // The water branch has to come before the cohesion test, which would
+  // otherwise release it with the sand rule's idea of a direction.
+  const emit = simulation.match(/\nfn\s+emit\([\s\S]*?\n\}/)?.[0] ?? "";
+  const water = emit.indexOf("is_water(value)");
+  const held = emit.indexOf("!is_held(");
+  assert.ok(water >= 0 && water < held, "water must be handled before cohesion");
+});
+
+test("the shader agrees that water holds nothing up", () => {
+  // The one line the whole of sinking rests on. `solid_at` feeds every support
+  // count in the shader, so discounting water there is what makes a grain on a
+  // pool answer "not held" to the cohesion test it was already running.
+  const solid = body("solid_at");
+  assert.ok(solid, "solid_at is missing from the shader");
+  assert.match(solid, /is_water\(/, "water must not be counted as support");
+  for (const caller of ["support_count", "is_held"]) {
+    assert.match(body(caller), /solid_at\(/, `${caller} must go through solid_at`);
+  }
+});
+
+test("sand and water trade places, and exactly one of them may have the cell", () => {
+  const emit = body("emit");
+  assert.ok(emit, "emit is missing from the shader");
+
+  // The swap is the only thing in the simulation that writes a cell other than
+  // its own, so the cell it reaches for has to be claimed rather than simply
+  // stored into: the water's own invocation may be releasing it in the same
+  // pass, and exactly one of the two may end up with it.
+  assert.match(emit, /displaces_water\(/, "emit must offer the trade");
+  assert.match(
+    emit,
+    /atomicCompareExchangeWeak\(&field\[below\], under, value\)/,
+    "the cell below must be claimed with a compare-exchange",
+  );
+
+  // The other side of that race: a release claims its own cell before it spends
+  // anything from the pool, so a losing claim costs nothing and leaves nothing
+  // half-done.
+  const claim = emit.indexOf("atomicCompareExchangeWeak(&field[c], value, 0u)");
+  const budget = emit.indexOf("atomicSub(&counters.pop_budget");
+  const pop = emit.indexOf("atomicAdd(&counters.head");
+  assert.ok(claim >= 0, "emit must claim the cell it releases");
+  assert.ok(claim < budget && budget < pop, "claim, then budget, then the slot");
+  assert.doesNotMatch(
+    emit,
+    /atomicStore\(&field\[c\], 0u\)/,
+    "an unconditional store would clobber a cell the swap had just claimed",
+  );
+
+  // Sinking is free: it moves nothing into the pool, so it must not be gated on
+  // a pool that has run out, or a flooded world would stop sinking exactly when
+  // it was busiest.
+  assert.ok(emit.indexOf("displaces_water(") < budget, "the trade happens before the pool budget");
+});
+
+test("a lemming drowns on contact with water", () => {
+  const step = simulation.match(/\nfn\s+step_agents\([\s\S]*?\n\}/)?.[0] ?? "";
+  const drown = step.indexOf("touches_water(x, y)");
+  const debris = step.indexOf("struck_by_debris(x, y)");
+  assert.ok(drown >= 0, "step_agents must check for water");
+  assert.ok(drown < debris, "and drowning is checked before being hit by debris");
+  assert.match(step, /counters\.drowned/, "drownings are counted separately");
 });
 
 test("an impact hands over momentum rather than destroying it", () => {

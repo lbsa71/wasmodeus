@@ -21,7 +21,8 @@
  * Mirrored by `support_at` and `neighbour_support` in
  * `src/gpu/shaders/simulation.wgsl`.
  */
-import { isBlocked } from "./geometry.js";
+import { cellBond, isWater } from "./field-format.js";
+import { cellIndex, inBounds, isBlocked } from "./geometry.js";
 import { random01 } from "./prng.js";
 
 /** Nothing can move: all three cells beneath are solid. */
@@ -32,10 +33,32 @@ export const SUPPORT_FALL = 1;
 export const SUPPORT_SLUMP = 2;
 
 /**
- * How many of the eight surrounding cells are solid.
+ * Whether a neighbouring cell holds anything up.
  *
  * Outside the world counts as solid: the floor and the walls hold material in
  * rather than letting the edges of the world quietly drain away.
+ *
+ * **Water holds nothing up.** It is occupied, and it blocks movement, but it
+ * bears no load — which is the entire mechanism by which things sink through
+ * it. A grain resting on a pool has three water cells beneath it, and counting
+ * those as support is what made sand float like a raft. Discount them and the
+ * cohesion test the grain already runs answers "not held", so it lets go, and
+ * the only new rule needed is what it does then: see {@link displacesWater}.
+ *
+ * @param {ArrayLike<number>} field
+ * @param {number} x @param {number} y
+ * @param {{ width: number, height: number }} world
+ * @returns {boolean}
+ */
+export function isSupporting(field, x, y, world) {
+  const { width, height } = world;
+  if (!isBlocked(field, x, y, width, height)) return false;
+  if (!inBounds(x, y, width, height)) return true;
+  return !isWater(field[cellIndex(x, y, width)]);
+}
+
+/**
+ * How many of the eight surrounding cells hold this one up.
  *
  * The four orthogonal neighbours are counted first so a caller can stop early —
  * most of a solid world is interior rock whose bond is already satisfied by
@@ -47,9 +70,8 @@ export const SUPPORT_SLUMP = 2;
  * @returns {{ orthogonal: number, total: number }}
  */
 export function neighbourSupport(field, x, y, world) {
-  const { width, height } = world;
   /** @param {number} dx @param {number} dy @returns {number} */
-  const solid = (dx, dy) => (isBlocked(field, x + dx, y + dy, width, height) ? 1 : 0);
+  const solid = (dx, dy) => (isSupporting(field, x + dx, y + dy, world) ? 1 : 0);
   const orthogonal = solid(-1, 0) + solid(1, 0) + solid(0, -1) + solid(0, 1);
   const diagonal = solid(-1, -1) + solid(1, -1) + solid(-1, 1) + solid(1, 1);
   return { orthogonal, total: orthogonal + diagonal };
@@ -117,6 +139,62 @@ export function releases(support, chance, seed) {
   if (support === SUPPORT_FALL) return true;
   if (support !== SUPPORT_SLUMP) return false;
   return random01(seed) < chance;
+}
+
+/**
+ * Where water goes next: straight down, then down-diagonally, then flat
+ * sideways.
+ *
+ * That last step is the whole difference between water and sand. Sand needs an
+ * opening *below* something before it will move, which is why it heaps; water
+ * will shoulder its way along a level floor, so a pool spreads until it finds
+ * its own level and then stops. Stopping matters as much as moving: with
+ * nowhere to go it stays exactly where it is, which is what makes a still pool
+ * still rather than a permanent churn.
+ *
+ * @param {ArrayLike<number>} field
+ * @param {number} x @param {number} y
+ * @param {{ width: number, height: number }} world
+ * @param {number} seed breaks ties between two open sides
+ * @returns {{ x: number, y: number }} zero when there is nowhere to go
+ */
+export function waterFlow(field, x, y, world, seed) {
+  const { width, height } = world;
+  /** @param {number} dx @param {number} dy @returns {boolean} */
+  const open = (dx, dy) => !isBlocked(field, x + dx, y + dy, width, height);
+  if (open(0, -1)) return { x: 0, y: -1 };
+  const downLeft = open(-1, -1);
+  const downRight = open(1, -1);
+  if (downLeft || downRight) return { x: chooseDirection(downLeft, downRight, seed), y: -1 };
+  const left = open(-1, 0);
+  const right = open(1, 0);
+  if (left || right) return { x: chooseDirection(left, right, seed), y: 0 };
+  return { x: 0, y: 0 };
+}
+
+/**
+ * Whether a cell can trade places with water directly beneath it — which is
+ * what sinking is. Sand and water simply switch: the grain takes the cell below
+ * and the water takes the cell it left, one cell a frame, conserving both.
+ *
+ * There is no new question of *whether*. Cohesion already decides that, and
+ * because {@link isSupporting} discounts water the answer for anything resting
+ * on a pool is "nothing is holding this" — so a grain goes under and a rock
+ * ledge with neighbours of its own does not. Bedrock is asked for no
+ * neighbours at all, so it is held by definition and stands in the water.
+ *
+ * @param {ArrayLike<number>} field
+ * @param {number} x @param {number} y
+ * @param {{ width: number, height: number }} world
+ * @returns {boolean}
+ */
+export function displacesWater(field, x, y, world) {
+  const { width, height } = world;
+  if (!inBounds(x, y, width, height) || !inBounds(x, y - 1, width, height)) return false;
+  const word = field[cellIndex(x, y, width)];
+  if (word === 0 || isWater(word)) return false;
+  if (!isWater(field[cellIndex(x, y - 1, width)])) return false;
+  return !isHeld(neighbourSupport(field, x, y, world).total, cellBond(word));
 }
 
 /**

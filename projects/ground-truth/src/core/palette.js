@@ -34,7 +34,9 @@ export const MATERIALS = {
   stone: { rgb: [78, 80, 92], grain: 16, bond: 2 },
   paleStone: { rgb: [104, 106, 116], grain: 16, bond: 2 },
   ore: { rgb: [196, 158, 78], grain: 22, bond: 2 },
-  crystal: { rgb: [96, 186, 208], grain: 26, bond: 2 },
+  // Water. Bond 15 is unmeetable, so it flows wherever there is anywhere to
+  // flow to and stops only when there is not.
+  water: { rgb: [58, 132, 208], grain: 14, bond: 15 },
   gravel: { rgb: [96, 90, 84], grain: 20, bond: 5 },
   dirt: { rgb: [104, 74, 48], grain: 18, bond: 4 },
   sand: { rgb: [176, 152, 104], grain: 16, bond: 5 },

@@ -24,6 +24,19 @@ export const BOND_SHIFT = 25;
 export const BOND_MASK = 0x1e000000;
 /** A cell has at most eight neighbours, so this can never be satisfied. */
 export const MAX_BOND = 15;
+/**
+ * Water. A bond of fifteen is a bond eight neighbours can never meet, so water
+ * is held by nothing anywhere, ever — no arrangement of the world can support
+ * it. Everything that already asks "is this cell held?" therefore says no for
+ * water without being told about water at all; only the question of *which way*
+ * it goes needs a rule of its own. See `waterFlow` in `src/core/sand.js`.
+ */
+export const WATER_BOND = MAX_BOND;
+
+/** @param {number} word @returns {boolean} */
+export function isWater(word) {
+  return cellBond(word) === WATER_BOND;
+}
 /** Needs no neighbours at all: bedrock, and nothing else moves it but a blast. */
 export const IMMOVABLE = 0;
 /** What a pixel carries with it while airborne: its colour and its bond. */

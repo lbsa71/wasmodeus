@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { createCaveWorld, settleBonds, surfaceProfile } from "../src/core/world-gen.js";
 import { cellIndex } from "../src/core/geometry.js";
-import { cellBond, isOccupied, packCell, unpackCell } from "../src/core/field-format.js";
+import { WATER_BOND, cellBond, isOccupied, packCell, unpackCell } from "../src/core/field-format.js";
 import { neighbourSupport } from "../src/core/sand.js";
 import { MATERIALS } from "../src/core/palette.js";
 
@@ -34,6 +34,10 @@ test("the world starts glued: every cell has the support its bond asks for", () 
       if (!isOccupied(word)) continue;
       const bond = cellBond(word);
       if (bond === 0) continue;
+      // Water is the deliberate exception: its bond is one eight neighbours can
+      // never meet, which is exactly what makes it flow the moment anything
+      // opens a way out of the seam.
+      if (bond === WATER_BOND) continue;
       const { total } = neighbourSupport(world, x, y, WORLD);
       assert.ok(total >= bond, `cell ${x},${y} needs ${bond} neighbours but has ${total}`);
     }
@@ -170,4 +174,16 @@ test("settling does not depend on the order cells are visited in", () => {
   const once = settleBonds(field, size);
   assert.deepEqual(settleBonds(field, size), once, "the input must be left untouched");
   assert.deepEqual(settleBonds(once, size), once, "and the result must be a fixed point");
+});
+
+test("the world is seamed with water, and it is water that can never be held", () => {
+  // The blue veins deep in the rock. Their bond is unmeetable on purpose, so
+  // the moment anything digs into a seam it drains rather than sitting there.
+  let water = 0;
+  for (const word of world) {
+    if (!isOccupied(word)) continue;
+    if (cellBond(word) === WATER_BOND) water += 1;
+  }
+  assert.ok(water > 50, `only ${water} cells of water in the whole world`);
+  assert.ok(WATER_BOND > 8, "eight neighbours must not be able to satisfy it");
 });

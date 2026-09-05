@@ -65,6 +65,48 @@ applies.
 The **Flow** slider is how fluid released material looks, not whether it
 releases at all. That is the bond's job.
 
+## Water
+
+Water is a bond of **15**, and that is nearly the whole of it.
+
+Fifteen is a number eight neighbours can never reach, so every "is this cell
+held?" test already in the simulation answers *no* for water, everywhere,
+always — generation, cohesion, the collapse, the brush. Nothing had to learn
+about liquid. Water is simply material that nothing can hold, and it is released
+every frame it has anywhere to go.
+
+What is genuinely new is one rule about **which way** it goes:
+
+- **Anything open below** → down, then a down-diagonal, exactly like sand.
+- **Boxed in below** → *sideways along the flat*. This is the whole difference
+  between water and sand, and it is what lets a pool find its level instead of
+  standing up in a heap.
+- **Nowhere at all** → it stays put. Without that last line a still pool churns
+  for ever, because every cell in it would keep claiming a slot to go nowhere.
+
+Three consequences had to be handled explicitly:
+
+- Generation's settle-every-bond-to-its-support pass **skips water**, or the
+  seams would be pinned at whatever support they happened to have and would
+  never flow.
+- `settle` deposits water **as water**. Everything else lands as rubble, and a
+  river that silted into a sandbank the moment it stopped would not be a river.
+- Water is exempt from `settle`'s check-what-is-underneath guard. That guard
+  exists to stop pixels freezing at the apex of an arc; water needs to be able
+  to come to rest on top of other water, which is how a shaft fills from the
+  bottom.
+
+Seam water drains and pools on its own: 27 827 cells of it are laid down in
+seams, and 400 frames later it has found the cavern floors and gone still bar
+the edges — flow falls from 759 cells a frame to under a hundred as the pools
+level off.
+
+**Lemmings drown.** Water is checked before the debris test, and it is fatal on
+contact — a lemming caught by a flood does not decohere into a spray of its own
+pixels the way one crushed by falling rock does, it simply goes under, so there
+is nothing to release. Dropped into a flooded seam, 351 of 600 went under in a
+single frame; the same 600 on dry ground lost none over sixty frames.
+
 ## Lemmings
 
 Small creatures walk the world, tunnel through it, and occasionally sit down and
@@ -252,7 +294,7 @@ hundred frames while the slower bond-driven collapse carries on behind it.
 6144 × 3456 cells — about twenty-one million, some six times the area of a
 1080p screen at 1:1. A rolling surface with soil, sand lenses, grass and trees;
 a tunnel-and-cavern system carved out of the rock beneath it; moss, glowcaps,
-mushrooms and hanging vines lining the caves; ore and crystal veins; and pockets
+mushrooms and hanging vines lining the caves; ore veins and water seams; and pockets
 of loose spoil buried in the stone that run like sand the moment you breach one.
 
 It is a pure function of its seed, and every feature size is a fraction of the
@@ -325,6 +367,8 @@ Requires a browser with WebGPU.
 | `stuck/f` | pixels with no free cell within reach, widening their search |
 | `lemmings` | how many are alive and walking |
 | `dug/f` | cells excavated by lemmings this frame |
+| `flowing/f` | water cells that moved this frame; falls to near zero as pools level |
+| `drowned/f` | lemmings lost to water this frame |
 | `view` / `zoom` | where the camera is and how far in |
 
 ## Layout
@@ -333,7 +377,7 @@ Requires a browser with WebGPU.
 | --- | --- |
 | `src/core/` | Pure logic: cell encoding, cohesion and the sand rule, geometry, the integrator, the camera, noise, world generation, buffer layouts. No GPU, fully unit-tested. |
 | `src/gpu/` | Device acquisition, pipelines, buffer ownership, non-blocking readback. |
-| `src/gpu/shaders/` | `simulation.wgsl` (seven compute entry points) and `composite.wgsl`. |
+| `src/gpu/shaders/` | `simulation.wgsl` (ten compute entry points) and `composite.wgsl`. |
 | `src/worker/` | World generation, off the main thread. |
 | `src/ui/` | Debug-panel formatting and the frame-rate meter. |
 | `test/` | `node --test` suites, including a contract test that fails if the shader and the JavaScript memory layouts drift apart. |

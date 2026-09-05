@@ -24,6 +24,12 @@ const REASON_DISLODGE: u32  = 1u;
 const REASON_UNDERMINE: u32 = 2u;
 const REASON_SLUMP: u32     = 3u;
 const REASON_BLAST: u32     = 4u;
+const REASON_WATER: u32     = 5u;
+
+// Water. A bond of fifteen is one that eight neighbours can never meet, so
+// every "is this held?" in the simulation already answers no for water without
+// knowing anything about water. Only which way it goes needs a rule of its own.
+const WATER_BOND: u32 = 15u;
 
 // How the three cells beneath a pixel hold it up. See `src/core/sand.js`.
 const SUPPORT_FIRM: i32  = 0;
@@ -111,6 +117,7 @@ struct Params {
   agent_blast: f32,
   // Agents step once a frame, not once a substep, so they need the whole tick.
   frame_seconds: f32,
+  water_spread: f32,
 };
 
 // Scalars, not vec2f: a vec2f would align this to eight bytes and pad it to 24.
@@ -144,6 +151,9 @@ struct Counters {
   stuck: atomic<u32>,
   walking: atomic<u32>,
   dug: atomic<u32>,
+  flowing: atomic<u32>,
+  drowned: atomic<u32>,
+  sank: atomic<u32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -214,9 +224,26 @@ fn open_at(x: i32, y: i32) -> bool {
   return atomicLoad(&field[cell_index(x, y)]) == 0u;
 }
 
+fn is_water(word: u32) -> bool {
+  return bond_of(word) == WATER_BOND;
+}
+
+// Whether a neighbour holds this cell up. Outside the world counts: the floor
+// and the walls hold material in rather than letting the edges drain away.
+//
+// Water holds nothing up. It is occupied and it blocks movement, but it bears
+// no load, and that single exception is the whole of sinking: a grain resting
+// on a pool has three water cells beneath it, and counting those as support is
+// what made sand float on water like a raft. Discount them and the cohesion
+// test the grain already runs answers "not held" all by itself. Only what it
+// does next needed a rule — see `displaces_water`.
 fn solid_at(x: i32, y: i32) -> u32 {
-  if (blocked_at(x, y)) { return 1u; }
-  return 0u;
+  if (x < 0 || x >= i32(params.world.x)) { return 1u; }
+  if (y < 0) { return 1u; }
+  if (y >= i32(params.world.y)) { return 0u; }
+  let word = atomicLoad(&field[cell_index(x, y)]);
+  if (word == 0u || is_water(word)) { return 0u; }
+  return 1u;
 }
 
 // Whether a cell's neighbours are enough to hold it. Outside the world counts
@@ -254,6 +281,23 @@ fn smudgeable(x: i32, y: i32, bond: u32) -> bool {
   return i32(support_count(x, y)) - i32(bond) <= SMUDGE_REACH;
 }
 
+// Where water goes next: straight down, then down-diagonally, then flat
+// sideways. The last is the whole difference between water and sand — sand
+// needs an opening *below* something before it will move, which is why it
+// heaps, while water walks along a level floor until the pool is level. With
+// nowhere to go it returns zero and stays exactly where it is, which is what
+// makes a still pool still instead of a permanent churn.
+fn water_flow(x: i32, y: i32, seed: u32) -> vec2i {
+  if (open_at(x, y - 1)) { return vec2i(0, -1); }
+  let down_left = open_at(x - 1, y - 1);
+  let down_right = open_at(x + 1, y - 1);
+  if (down_left || down_right) { return vec2i(choose_direction(down_left, down_right, seed), -1); }
+  let left = open_at(x - 1, y);
+  let right = open_at(x + 1, y);
+  if (left || right) { return vec2i(choose_direction(left, right, seed ^ 0x1b7u), 0); }
+  return vec2i(0, 0);
+}
+
 // Ties are broken by the seed, or every heap in the world would lean the same
 // way.
 fn choose_direction(left: bool, right: bool, seed: u32) -> i32 {
@@ -275,6 +319,22 @@ fn support_at(x: i32, y: i32, seed: u32) -> vec2i {
   let right = open_at(x + 1, y - 1);
   if (!left && !right) { return vec2i(SUPPORT_FIRM, 0); }
   return vec2i(SUPPORT_SLUMP, choose_direction(left, right, seed));
+}
+
+// Whether this cell can trade places with water directly beneath it, which is
+// what sinking is: the grain takes the cell below and the water takes the one
+// it left, a cell a frame, both conserved.
+//
+// There is no new question of *whether*. Cohesion decides that, and because
+// `solid_at` discounts water the answer for anything resting on a pool is that
+// nothing was holding it — so a loose grain goes under while a rock ledge with
+// neighbours of its own stays put. Bedrock is asked for no neighbours at all,
+// so it is held by definition and stands in the water rather than sinking.
+fn displaces_water(x: i32, y: i32, word: u32) -> bool {
+  if (is_water(word)) { return false; }
+  if (y <= 0) { return false; }
+  if (!is_water(atomicLoad(&field[cell_index(x, y - 1)]))) { return false; }
+  return !is_held(x, y, bond_of(word));
 }
 
 // Claims one cell for a settling pixel, if it happens to be empty.
@@ -382,6 +442,8 @@ fn prepare() {
   atomicStore(&counters.stuck, 0u);
   atomicStore(&counters.walking, 0u);
   atomicStore(&counters.dug, 0u);
+  atomicStore(&counters.flowing, 0u);
+  atomicStore(&counters.drowned, 0u);
 }
 
 @compute @workgroup_size(256)
@@ -526,15 +588,28 @@ fn settle(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) gr
   // whose interior satisfies its own bond, and the clump hangs there for good.
   // Smudging upward launches a whole brushful of pixels that reach their apex
   // at the same moment, which is why it froze them in the sky.
-  if (open_at(x, y - 1)) {
+  // A pixel comes to rest *on* something, and "has not changed cell" is not
+  // enough on its own: at the apex of an arc a pixel barely moves from one frame
+  // to the next, so it would settle in mid-air. Several arriving together then
+  // form a clump whose interior satisfies its own bond, and the clump hangs
+  // there for good.
+  //
+  // Water is exempt. It has no bond to satisfy, so a drop that stops in mid-air
+  // is released again next frame anyway — and requiring a floor would stop a
+  // column of water ever filling a shaft from the bottom up.
+  if (!is_water(state) && open_at(x, y - 1)) {
     states[i] = with_rest(state, 0u);
     return;
   }
 
   // Anything that has been airborne comes back down as rubble: blasted stone
-  // does not re-freeze into cliff face that holds a ceiling up again.
+  // does not re-freeze into cliff face that holds a ceiling up again. Water is
+  // the exception and has to be — settle it as rubble and a drop turns to sand
+  // the first time it lands, and a river silts up into a sandbank.
+  var landed_bond = params.rubble_bond;
+  if (is_water(state)) { landed_bond = WATER_BOND; }
   let deposit = ((state & MATERIAL_MASK) & ~BOND_MASK)
-    | (params.rubble_bond << BOND_SHIFT)
+    | (landed_bond << BOND_SHIFT)
     | OCCUPIED_BIT;
   let claimed = atomicCompareExchangeWeak(&field[p.last_cell], 0u, deposit);
   if (claimed.exchanged) {
@@ -615,6 +690,35 @@ fn emit(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) grou
     // for as long as the pointer is held down, far faster than any of it can
     // settle, and buries an order of magnitude more than a blast does.
     reason = REASON_BLAST;
+  } else if (is_water(value)) {
+    // Water is held by nothing, so the only question is whether it has anywhere
+    // to go. A cell walled in by rock and its own kind is a cell at rest.
+    let flow = water_flow(x, y, seed);
+    if (flow.x != 0 || flow.y != 0) {
+      reason = REASON_WATER;
+      direction = flow.x;
+    }
+  } else if (displaces_water(x, y, value)) {
+    // Sand sinks through water by simply swapping with it. No pool slot is
+    // needed and none is taken: nothing here goes into motion, two cells just
+    // exchange contents, so sinking carries on working in a world whose pool
+    // has run dry.
+    //
+    // This is the one place anything writes a cell that is not its own, so the
+    // cell below is claimed rather than stored into: its own invocation may be
+    // releasing it in this same pass, and exactly one of the two may have it.
+    // Losing the claim costs nothing — the water left, so next frame this cell
+    // simply falls into the space instead.
+    let below = cell_index(x, y - 1);
+    let under = atomicLoad(&field[below]);
+    if (is_water(under) && atomicCompareExchangeWeak(&field[below], under, value).exchanged) {
+      // Our own cell has no other writer, so the water can go straight in. It
+      // sheds any dislodge mark on the way: whatever struck it left its
+      // momentum in the cell below, and the water is not going that way now.
+      atomicStore(&field[c], under & ~DISLODGE_BIT);
+      atomicAdd(&counters.sank, 1u);
+    }
+    return;
   } else if (!is_held(x, y, bond_of(value))) {
     // Its neighbours are no longer enough to hold it. Which way it goes is the
     // three-cell test; whether it goes at all was the bond.
@@ -628,6 +732,12 @@ fn emit(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) grou
   }
   if (reason == REASON_NONE) { return; }
 
+  // Claim the cell before spending anything. A water cell may also be claimed
+  // this frame by the cell above it trading places, and only one of the two may
+  // win; a loser that had already popped a slot would have to give it back, and
+  // only `settle` is allowed to push to the ring.
+  if (!atomicCompareExchangeWeak(&field[c], value, 0u).exchanged) { return; }
+
   let budget = atomicSub(&counters.pop_budget, 1);
   if (budget <= 0) {
     // The pool is full. Drop the dislodge mark so the cell is reconsidered
@@ -640,7 +750,6 @@ fn emit(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) grou
     return;
   }
   let slot = free_ring[atomicAdd(&counters.head, 1u) & params.ring_mask];
-  atomicStore(&field[c], 0u);
 
   var vel = vec2f(0.0, -0.5);
   if (reason == REASON_DISLODGE) {
@@ -672,6 +781,11 @@ fn emit(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) grou
         * (0.6 + 0.8 * rand01(seed ^ 0x9e37u));
     }
     atomicAdd(&counters.dislodged, 1u);
+  } else if (reason == REASON_WATER) {
+    // Sideways along a floor, or down and along. Gently: water creeps, and a
+    // drop given a real shove would arc away like grit.
+    vel = vec2f(f32(direction) * params.water_spread, -params.water_spread * 0.5);
+    atomicAdd(&counters.flowing, 1u);
   } else if (reason == REASON_SLUMP) {
     vel = vec2f(f32(direction) * params.slide_speed, -0.5);
     atomicAdd(&counters.undermined, 1u);
@@ -711,6 +825,17 @@ fn struck_by_debris(x: i32, y: i32) -> bool {
     for (var dx = -AGENT_HALF_W; dx <= AGENT_HALF_W; dx += 1) {
       if (!in_bounds(x + dx, y + dy)) { continue; }
       if ((atomicLoad(&overlay[cell_index(x + dx, y + dy)]) & OVERLAY_FAST) != 0u) { return true; }
+    }
+  }
+  return false;
+}
+
+// Whether any part of a lemming is in the water.
+fn touches_water(x: i32, y: i32) -> bool {
+  for (var dy = 0; dy < AGENT_HEIGHT; dy += 1) {
+    for (var dx = -AGENT_HALF_W; dx <= AGENT_HALF_W; dx += 1) {
+      if (!in_bounds(x + dx, y + dy)) { continue; }
+      if (is_water(atomicLoad(&field[cell_index(x + dx, y + dy)]))) { return true; }
     }
   }
   return false;
@@ -789,6 +914,16 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
 
   // Anything hurtling through takes it apart: the same bargain the rest of the
   // world makes, hold together until something hits hard enough.
+  // Water is fatal on contact. A lemming caught by a flood does not decohere
+  // into a spray of its own pixels the way one crushed by rock does — it simply
+  // goes under, so there is nothing to release.
+  if (touches_water(x, y)) {
+    atomicAdd(&counters.drowned, 1u);
+    agents[i] = Agent(a.pos_x, a.pos_y, 0.0, 0.0,
+      AGENT_RESPAWN + (hash_u32(i ^ params.frame) % 100u));
+    return;
+  }
+
   if (struck_by_debris(x, y)) {
     shatter(i, x, y, colour);
     agents[i] = Agent(a.pos_x, a.pos_y, 0.0, 0.0,

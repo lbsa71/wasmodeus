@@ -32,6 +32,7 @@ struct Params {
   agent_bomb_chance: f32,
   agent_blast: f32,
   frame_seconds: f32,
+  water_spread: f32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;

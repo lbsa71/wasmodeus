@@ -347,6 +347,7 @@ export class GroundTruthEngine {
       drag: this.drag,
       agents: settings.agents,
       frameSeconds: settings.frameSeconds,
+      waterSpread: settings.waterSpread,
     });
     this.device.queue.writeBuffer(this.resources.params, 0, this.paramsData);
   }

@@ -24,7 +24,8 @@ import { RUBBLE_BOND } from "./palette.js";
  *   brushRadius: number,
  *   blastStrength: number,
  *   smudgeStrength: number,
- *   agents: { count: number, speed: number, bombChance: number, blastRadius: number }
+ *   agents: { count: number, speed: number, bombChance: number, blastRadius: number },
+ *   waterSpread: number
  * }} Settings
  */
 
@@ -69,5 +70,9 @@ export function defaultSettings() {
     // Lemmings: how many walk the world, how fast, how readily one sits down
     // and lights a bomb, and how big a hole that leaves.
     agents: { count: 600, speed: 26, bombChance: 0.12, blastRadius: 20 },
+    // How briskly water creeps sideways. Water is released every frame it has
+    // anywhere to go, so this only has to be enough to carry a drop into the
+    // next cell; a real shove would make it arc away like grit.
+    waterSpread: 46,
   };
 }
