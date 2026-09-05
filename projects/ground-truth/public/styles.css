@@ -38,6 +38,21 @@ html, body {
 
 #status.error { color: #ff9d9d; max-width: 32rem; }
 
+#score {
+  position: fixed;
+  z-index: 1;
+  left: 50%;
+  top: 1rem;
+  transform: translateX(-50%);
+  margin: 0;
+  font-size: 1.5rem;
+  letter-spacing: .04em;
+  color: #ffd75a;
+  text-shadow: 0 0 14px rgba(255, 200, 60, .35);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
 #debug {
   position: fixed;
   z-index: 1;

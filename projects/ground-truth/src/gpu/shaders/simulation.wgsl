@@ -8,6 +8,12 @@ const OCCUPIED_BIT: u32  = 0x01000000u;
 const DISLODGE_BIT: u32  = 0x80000000u;
 const COLOR_MASK: u32    = 0x00ffffffu;
 const MATERIAL_MASK: u32 = 0x1effffffu;
+// The black placeholder that underground emptiness is made of. Present, so it
+// counts as a neighbour and a tunnel holds its own roof up; open, so a pixel
+// falls straight through it and whatever comes to rest in it replaces it.
+// Never carried: it sits outside MATERIAL_MASK. See `src/core/field-format.js`.
+const VOID_BIT: u32  = 0x20000000u;
+const VOID_CELL: u32 = 0x21000000u;
 const BOND_SHIFT: u32    = 25u;
 const BOND_MASK: u32     = 0x1e000000u;
 const SKY_CELL: u32      = 0xffffffffu;
@@ -154,6 +160,8 @@ struct Counters {
   flowing: atomic<u32>,
   drowned: atomic<u32>,
   sank: atomic<u32>,
+  // The score: gold a lemming has dug through. Never reset by a frame.
+  gold: atomic<u32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -209,11 +217,18 @@ fn bond_of(word: u32) -> u32 {
 }
 
 // Side walls and the floor are solid; the sky is open so debris can fly.
+fn is_void(word: u32) -> bool {
+  return (word & VOID_BIT) != 0u;
+}
+
+// Whether a moving pixel, a drop of water or a lemming is stopped here. The
+// placeholder is not an obstacle: a tunnel is somewhere to fall through.
 fn blocked_at(x: i32, y: i32) -> bool {
   if (x < 0 || x >= i32(params.world.x)) { return true; }
   if (y < 0) { return true; }
   if (y >= i32(params.world.y)) { return false; }
-  return atomicLoad(&field[cell_index(x, y)]) != 0u;
+  let word = atomicLoad(&field[cell_index(x, y)]);
+  return word != 0u && !is_void(word);
 }
 
 // The sand rule's view of a neighbour: nowhere outside the world counts as
@@ -221,7 +236,8 @@ fn blocked_at(x: i32, y: i32) -> bool {
 fn open_at(x: i32, y: i32) -> bool {
   if (x < 0 || x >= i32(params.world.x) || y < 0) { return false; }
   if (y >= i32(params.world.y)) { return true; }
-  return atomicLoad(&field[cell_index(x, y)]) == 0u;
+  let word = atomicLoad(&field[cell_index(x, y)]);
+  return word == 0u || is_void(word);
 }
 
 fn is_water(word: u32) -> bool {
@@ -230,6 +246,10 @@ fn is_water(word: u32) -> bool {
 
 // Whether a neighbour holds this cell up. Outside the world counts: the floor
 // and the walls hold material in rather than letting the edges drain away.
+//
+// The placeholder holds everything up. It is water's mirror image — it stops
+// nothing, but it bears load — and that is what keeps a tunnel's roof where it
+// is once a lemming has dug it. So this is deliberately not `blocked_at`.
 //
 // Water holds nothing up. It is occupied and it blocks movement, but it bears
 // no load, and that single exception is the whole of sinking: a grain resting
@@ -254,10 +274,25 @@ fn solid_at(x: i32, y: i32) -> u32 {
 // when they might change the answer: most of a solid world is interior rock
 // whose bond the orthogonals already satisfy, and that is four loads per cell
 // per frame saved across twenty million of them.
-fn support_count(x: i32, y: i32) -> u32 {
-  return solid_at(x - 1, y) + solid_at(x + 1, y) + solid_at(x, y - 1) + solid_at(x, y + 1)
-    + solid_at(x - 1, y - 1) + solid_at(x + 1, y - 1)
-    + solid_at(x - 1, y + 1) + solid_at(x + 1, y + 1);
+// What actually packs a cell in: matter that would have to move for it to.
+// Not the placeholder — a tunnel holds a wall up but does not bury it — and not
+// water. This is what an impact has to overcome and what the brush has to reach
+// through, whereas `solid_at` is what a cell may rest on. Count the placeholder
+// here and every cave wall reads as buried eight deep: unsmudgeable, and too
+// well packed for any impact to splash.
+fn covered_at(x: i32, y: i32) -> u32 {
+  if (x < 0 || x >= i32(params.world.x)) { return 1u; }
+  if (y < 0) { return 1u; }
+  if (y >= i32(params.world.y)) { return 0u; }
+  let word = atomicLoad(&field[cell_index(x, y)]);
+  if (word == 0u || is_water(word) || is_void(word)) { return 0u; }
+  return 1u;
+}
+
+fn cover_count(x: i32, y: i32) -> u32 {
+  return covered_at(x - 1, y) + covered_at(x + 1, y) + covered_at(x, y - 1) + covered_at(x, y + 1)
+    + covered_at(x - 1, y - 1) + covered_at(x + 1, y - 1)
+    + covered_at(x - 1, y + 1) + covered_at(x + 1, y + 1);
 }
 
 fn is_held(x: i32, y: i32, bond: u32) -> bool {
@@ -278,20 +313,29 @@ fn is_held(x: i32, y: i32, bond: u32) -> bool {
 // exposes more of it. That difference is the whole feel of the tool.
 fn smudgeable(x: i32, y: i32, bond: u32) -> bool {
   if (bond == 0u) { return false; }
-  return i32(support_count(x, y)) - i32(bond) <= SMUDGE_REACH;
+  return i32(cover_count(x, y)) - i32(bond) <= SMUDGE_REACH;
 }
 
-// Where water goes next: straight down, then down-diagonally, then flat
-// sideways. The last is the whole difference between water and sand — sand
-// needs an opening *below* something before it will move, which is why it
-// heaps, while water walks along a level floor until the pool is level. With
-// nowhere to go it returns zero and stays exactly where it is, which is what
-// makes a still pool still instead of a permanent churn.
+// Where water goes next: straight down, then down-diagonally, then — under
+// pressure — flat sideways. The last is the whole difference between water and
+// sand: sand needs an opening *below* something before it will move, which is
+// why it heaps, while water walks along a level floor until the pool is level.
+// With nowhere to go it returns zero and stays exactly where it is, which is
+// what makes a still pool still instead of a permanent churn.
+//
+// Pressure means water directly above. Without that a pool's surface is a
+// partial row of cells each with an open side, sliding back and forth for ever
+// — ninety-odd pixels permanently in flight over a tank that should have been
+// at rest. With it a film one cell deep is already level, and a pool levels
+// from below: buried cells are squeezed out sideways and the ones above drop.
 fn water_flow(x: i32, y: i32, seed: u32) -> vec2i {
   if (open_at(x, y - 1)) { return vec2i(0, -1); }
   let down_left = open_at(x - 1, y - 1);
   let down_right = open_at(x + 1, y - 1);
   if (down_left || down_right) { return vec2i(choose_direction(down_left, down_right, seed), -1); }
+  if (y + 1 >= i32(params.world.y) || !is_water(atomicLoad(&field[cell_index(x, y + 1)]))) {
+    return vec2i(0, 0);
+  }
   let left = open_at(x - 1, y);
   let right = open_at(x + 1, y);
   if (left || right) { return vec2i(choose_direction(left, right, seed ^ 0x1b7u), 0); }
@@ -325,22 +369,39 @@ fn support_at(x: i32, y: i32, seed: u32) -> vec2i {
 // what sinking is: the grain takes the cell below and the water takes the one
 // it left, a cell a frame, both conserved.
 //
-// There is no new question of *whether*. Cohesion decides that, and because
-// `solid_at` discounts water the answer for anything resting on a pool is that
-// nothing was holding it — so a loose grain goes under while a rock ledge with
-// neighbours of its own stays put. Bedrock is asked for no neighbours at all,
-// so it is held by definition and stands in the water rather than sinking.
+// Granular material — anything needing as many neighbours as rubble does —
+// always sinks. On land its bond holds a heap together; in water it has no
+// cohesion at all. Gate it on cohesion instead and a slab of sand floats on its
+// own bottom row's neighbours, and loose sand knits into a crust on the surface
+// and floats too: 183 grains sitting on water after 600 frames, measured.
+//
+// A solid — stone — keeps its cohesion, and the question is the one `is_held`
+// already answers. Because `solid_at` discounts water, a lone stone resting on
+// a pool has nothing holding it and goes under, while a rock ledge with
+// neighbours of its own stays a ledge. Bedrock is asked for no neighbours at
+// all, so it is held by definition and stands in the water.
 fn displaces_water(x: i32, y: i32, word: u32) -> bool {
   if (is_water(word)) { return false; }
   if (y <= 0) { return false; }
   if (!is_water(atomicLoad(&field[cell_index(x, y - 1)]))) { return false; }
+  if (bond_of(word) >= params.rubble_bond) { return true; }
   return !is_held(x, y, bond_of(word));
 }
 
-// Claims one cell for a settling pixel, if it happens to be empty.
+// Claims a cell for a settling pixel. Empty is what it usually finds; the
+// placeholder is the other thing a pixel may come to rest in, and it is
+// replaced by whatever arrives — that is the whole of "becomes what perturbs
+// it". Two compare-exchanges rather than one test-and-store, because either
+// may lose a race and a loser must leave nothing half-done.
+fn claim_cell(c: u32, deposit: u32) -> bool {
+  if (atomicCompareExchangeWeak(&field[c], 0u, deposit).exchanged) { return true; }
+  return atomicCompareExchangeWeak(&field[c], VOID_CELL, deposit).exchanged;
+}
+
+// Claims one cell for a settling pixel, if there is nothing in it.
 fn deposit_into(x: i32, y: i32, value: u32) -> bool {
   if (!in_bounds(x, y)) { return false; }
-  return atomicCompareExchangeWeak(&field[cell_index(x, y)], 0u, value).exchanged;
+  return claim_cell(cell_index(x, y), value);
 }
 
 // Finds somewhere for a pixel whose own cell was taken. Rings outward from the
@@ -413,7 +474,7 @@ fn strike(x: i32, y: i32, speed: f32, momentum: vec2f) -> bool {
   // Already committed to moving. Later strikers bounce off it, they do not pile
   // more momentum onto the same grain.
   if ((value & DISLODGE_BIT) != 0u) { return false; }
-  let surplus = f32(max(0, i32(support_count(x, y)) - i32(bond)));
+  let surplus = f32(max(0, i32(cover_count(x, y)) - i32(bond)));
   if (speed < params.dislodge_speed * (1.0 + surplus * IMPACT_RESISTANCE)) { return false; }
   // Atomic test-and-set, so exactly one striker per frame gets to move this
   // cell. Accumulating instead — every striker adding its share — launches one
@@ -444,6 +505,7 @@ fn prepare() {
   atomicStore(&counters.dug, 0u);
   atomicStore(&counters.flowing, 0u);
   atomicStore(&counters.drowned, 0u);
+  atomicStore(&counters.sank, 0u);
 }
 
 @compute @workgroup_size(256)
@@ -611,8 +673,7 @@ fn settle(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) gr
   let deposit = ((state & MATERIAL_MASK) & ~BOND_MASK)
     | (landed_bond << BOND_SHIFT)
     | OCCUPIED_BIT;
-  let claimed = atomicCompareExchangeWeak(&field[p.last_cell], 0u, deposit);
-  if (claimed.exchanged) {
+  if (claim_cell(p.last_cell, deposit)) {
     states[i] = 0u;
     // Push only — `emit` is the only pass that pops, and it runs after this.
     let slot = atomicAdd(&counters.tail, 1u);
@@ -668,7 +729,9 @@ fn emit(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) grou
   atomicStore(&overlay[c], 0u);
 
   let value = atomicLoad(&field[c]);
-  if (value == 0u) { return; }
+  // Nothing to release from empty space, and nothing from the placeholder: a
+  // tunnel is not material, and neither the brush nor a blast can move it.
+  if (value == 0u || is_void(value)) { return; }
 
   let x = i32(c % params.world.x);
   let y = i32(c / params.world.x);
@@ -841,8 +904,32 @@ fn touches_water(x: i32, y: i32) -> bool {
   return false;
 }
 
-// Releases one cell into the pool with a velocity. Returns whether a slot was
-// free; a lemming that cannot dig this frame simply waits.
+// Gold is the one material told apart by what it looks like: a pixel carries
+// nothing but colour and bond, so a nugget blown out of a wall is still gold
+// wherever it lands. The thresholds mirror `isGold` in `src/core/palette.js`.
+fn is_gold(word: u32) -> bool {
+  let r = word & 255u;
+  let g = (word >> 8u) & 255u;
+  let b = (word >> 16u) & 255u;
+  return r >= 236u && g >= 190u && b <= 96u;
+}
+
+// Digging turns a cell into the placeholder rather than releasing it, so the
+// tunnel keeps its shape and holds its own roof up, and it costs the pool
+// nothing. Bedrock is beyond a lemming; water is not dug but drowned in. Gold
+// dug through is gold mined.
+fn dig_cell(x: i32, y: i32) -> bool {
+  if (!in_bounds(x, y)) { return false; }
+  let c = cell_index(x, y);
+  let value = atomicLoad(&field[c]);
+  if (value == 0u || is_void(value) || is_water(value) || bond_of(value) == 0u) { return false; }
+  if (!atomicCompareExchangeWeak(&field[c], value, VOID_CELL).exchanged) { return false; }
+  if (is_gold(value)) { atomicAdd(&counters.gold, 1u); }
+  return true;
+}
+
+// Releases one cell into the pool with a velocity, for the bomb. Returns
+// whether a slot was free.
 fn release_cell(x: i32, y: i32, vel: vec2f) -> bool {
   if (!in_bounds(x, y)) { return false; }
   let c = cell_index(x, y);
@@ -972,13 +1059,21 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
   }
 
   if (mode == MODE_DIG) {
-    // Chews the cell ahead and the one above it, so the tunnel is tall enough
-    // to walk back through.
-    let low = release_cell(x + facing, y, vec2f(f32(facing) * 40.0, 10.0));
-    let high = release_cell(x + facing, y + 1, vec2f(f32(facing) * 40.0, 30.0));
-    if (low || high) { atomicAdd(&counters.dug, 1u); }
-    if (low) {
-      a.pos_x = clamp(a.pos_x + f32(facing) * 0.7, 0.0, f32(params.world.x) - EDGE_EPSILON);
+    // A tunnel one cell bigger than the lemming in every direction it can be:
+    // its own height plus headroom, cut two columns ahead so the working face
+    // is always clear of the sprite. Nothing is released and nothing is spent
+    // from the pool — see `dig_cell`.
+    var dug = 0u;
+    for (var step = 1; step <= 2; step += 1) {
+      for (var dy = 0; dy <= AGENT_HEIGHT; dy += 1) {
+        if (dig_cell(x + facing * step, y + dy)) { dug += 1u; }
+      }
+    }
+    atomicAdd(&counters.dug, dug);
+    // Digging is slower going than walking.
+    if (!blocked_at(x + facing, y)) {
+      a.pos_x = clamp(a.pos_x + f32(facing) * params.agent_speed * params.frame_seconds * 0.5,
+        0.0, f32(params.world.x) - EDGE_EPSILON);
     }
   } else {
     // Walking. Clear ahead and it walks on; a single cell in the way and it

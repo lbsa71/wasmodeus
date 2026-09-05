@@ -23,10 +23,14 @@ export const COUNTER_WORDS = [
   "flowing",
   "drowned",
   "sank",
+  "gold",
 ];
 /** Padded past the 32 bytes of counters so the block stays 16-byte aligned. */
 export const COUNTERS_BYTES = 64;
-/** Counters reset by the `prepare` pass every frame; the rest are persistent. */
+/**
+ * Counters reset by the `prepare` pass every frame; the rest are persistent.
+ * `gold` is the score: how much a lemming has ever dug through.
+ */
 export const PER_FRAME_COUNTERS = [
   "emitted", "deposited", "dislodged", "undermined", "denied", "crowded", "stuck",
   "walking", "dug", "flowing", "drowned", "sank",
@@ -44,7 +48,7 @@ export function counterIndex(name) {
  *   head: number, tail: number, popBudget: number, emitted: number,
  *   deposited: number, dislodged: number, undermined: number, denied: number,
  *   crowded: number, stuck: number, walking: number, dug: number,
- *   flowing: number, drowned: number, sank: number,
+ *   flowing: number, drowned: number, sank: number, gold: number,
  *   moving: number, free: number, capacity: number, utilisation: number
  * }} CounterSnapshot
  */

@@ -5,6 +5,7 @@ import {
   SUPPORT_FALL,
   SUPPORT_FIRM,
   SUPPORT_SLUMP,
+  GRANULAR_BOND,
   chooseDirection,
   displacesWater,
   neighbourSupport,
@@ -14,7 +15,8 @@ import {
   waterFlow,
 } from "../src/core/sand.js";
 import { cellIndex } from "../src/core/geometry.js";
-import { WATER_BOND, packCell } from "../src/core/field-format.js";
+import { VOID_CELL, WATER_BOND, packCell } from "../src/core/field-format.js";
+import { RUBBLE_BOND } from "../src/core/palette.js";
 
 const WORLD = { width: 8, height: 8 };
 
@@ -114,14 +116,23 @@ test("water takes a diagonal when it cannot go straight down", () => {
   assert.deepEqual(right, { x: 1, y: -1 });
 });
 
-test("water spreads flat sideways where sand would stop", () => {
-  // Solid all the way underneath. Sand calls this firm and stays; water walks
-  // along it, and that is what makes a pool find its level.
-  const field = fieldWith([[3, 2], [4, 2], [5, 2]]);
-  assert.equal(supportAt(field, 4, 3, WORLD, 0).support, SUPPORT_FIRM, "sand would settle here");
+test("water spreads flat sideways where sand would stop, when there is water above it", () => {
+  // Solid all the way underneath. Sand calls this firm and stays; water under
+  // pressure walks along the floor, which is what levels a pool.
+  const field = withBondAt(fieldWith([[3, 2], [4, 2], [5, 2]]), [[4, 4]], WATER_BOND);
+  assert.equal(supportAt(field, 4, 3, WORLD, 0).support, SUPPORT_FIRM, "sand stays");
   const flow = waterFlow(field, 4, 3, WORLD, 0);
   assert.equal(flow.y, 0);
   assert.ok(flow.x === -1 || flow.x === 1, "but water moves aside");
+});
+
+test("a drop with nothing above it lies still on the floor", () => {
+  // Sideways flow needs pressure. Without that a pool's surface is a partial
+  // row of cells each with an open side, and they slide back and forth for
+  // ever: measured at ninety-odd pixels permanently in flight over a tank that
+  // should have been at rest. A single film of water is already level.
+  const field = fieldWith([[3, 2], [4, 2], [5, 2]]);
+  assert.deepEqual(waterFlow(field, 4, 3, WORLD, 0), { x: 0, y: 0 });
 });
 
 test("water with nowhere to go stays put, so a still pool is still", () => {
@@ -138,10 +149,32 @@ test("the walls of the world hold water in", () => {
 });
 
 test("a tie between two open sides is broken by the seed", () => {
-  const field = fieldWith([[3, 2], [4, 2], [5, 2]]);
+  const field = withBondAt(fieldWith([[3, 2], [4, 2], [5, 2]]), [[4, 4]], WATER_BOND);
   const sides = Array.from({ length: 400 }, (_, seed) => waterFlow(field, 4, 3, WORLD, seed).x);
   const lefts = sides.filter((d) => d === -1).length;
   assert.ok(lefts > 150 && lefts < 250, `expected an even split, got ${lefts}/400`);
+});
+
+// --- The placeholder ---------------------------------------------------------
+
+test("the placeholder holds a roof up but lets a pixel fall", () => {
+  // The two halves of "acts as physical". A tunnel's ceiling counts the tunnel
+  // as a neighbour, so digging one does not bring the rock down; a grain
+  // released above it drops straight through to the floor.
+  const field = fieldWith([]);
+  for (const [x, y] of [[3, 2], [4, 2], [5, 2]]) field[cellIndex(x, y, WORLD.width)] = VOID_CELL;
+  assert.equal(neighbourSupport(field, 4, 3, WORLD).total, 3, "three cells of tunnel under it hold it");
+  assert.equal(supportAt(field, 4, 3, WORLD, 0).support, SUPPORT_FALL, "yet there is nothing to land on");
+});
+
+test("the placeholder never sinks, and nothing sinks into it", () => {
+  const field = water([[4, 2]]);
+  field[cellIndex(4, 3, WORLD.width)] = VOID_CELL;
+  assert.equal(displacesWater(field, 4, 3, WORLD), false);
+  const tunnel = fieldWith([]);
+  tunnel[cellIndex(4, 2, WORLD.width)] = VOID_CELL;
+  tunnel[cellIndex(4, 3, WORLD.width)] = packCell(9, 9, 9, 3);
+  assert.equal(displacesWater(tunnel, 4, 3, WORLD), false, "a tunnel is not water");
 });
 
 // --- Sinking ---------------------------------------------------------------
@@ -193,6 +226,20 @@ test("a ledge its neighbours can hold does not dive into the water below it", ()
   const lone = water([[3, 2], [4, 2], [5, 2]]);
   withBondAt(lone, [[4, 3]], 2);
   assert.equal(displacesWater(lone, 4, 3, WORLD), true);
+});
+
+test("granular material has no cohesion in water: a raft of sand still sinks", () => {
+  // The bottom row of a slab of sand floating on a pool has five grains around
+  // it, which on land is more than enough to hold a bond of three. Gate sinking
+  // on that and loose sand forms a crust on the surface and floats — measured
+  // on the GPU: 183 grains sitting on water after 600 frames. Sand does not do
+  // that. Anything that needs as many neighbours as rubble does is a granular
+  // material, and in water it is held by nothing at all.
+  const field = water([[3, 2], [4, 2], [5, 2]]);
+  withBondAt(field, [[3, 3], [5, 3], [3, 4], [4, 4], [5, 4]], GRANULAR_BOND);
+  withBondAt(field, [[4, 3]], GRANULAR_BOND);
+  assert.equal(displacesWater(field, 4, 3, WORLD), true);
+  assert.equal(GRANULAR_BOND, RUBBLE_BOND, "debris lands as rubble, and rubble must sink");
 });
 
 test("a grain at the bottom of a pool rests on the floor and stays there", () => {

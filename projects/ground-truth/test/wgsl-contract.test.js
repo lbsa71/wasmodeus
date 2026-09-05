@@ -8,8 +8,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { BOND_MASK, BOND_SHIFT, COLOR_MASK, DISLODGE_BIT, MATERIAL_MASK, OCCUPIED_BIT, WATER_BOND } from "../src/core/field-format.js";
+import {
+  BOND_MASK, BOND_SHIFT, COLOR_MASK, DISLODGE_BIT, MATERIAL_MASK, OCCUPIED_BIT, VOID_BIT, VOID_CELL, WATER_BOND,
+} from "../src/core/field-format.js";
 import { SKY_CELL } from "../src/core/geometry.js";
+import { COUNTER_WORDS, PER_FRAME_COUNTERS } from "../src/core/counters.js";
+import { GOLD_MAX_BLUE, GOLD_MIN_GREEN, GOLD_MIN_RED } from "../src/core/palette.js";
 import { SUPPORT_FALL, SUPPORT_FIRM, SUPPORT_SLUMP } from "../src/core/sand.js";
 import {
   COMPUTE_PASSES,
@@ -265,6 +269,10 @@ test("water is held by nothing, and knows where to go on its own", () => {
   assert.ok(flow, "water_flow is missing from the shader");
   assert.match(flow, /open_at\(x, y - 1\)[\s\S]*?return vec2i\(0, -1\)/, "down first");
   assert.match(flow, /open_at\(x - 1, y\)/, "then flat sideways, which sand never does");
+  // Sideways only under pressure: a surface cell with nothing above it stays,
+  // or a pool's partial top row slides back and forth for ever.
+  assert.match(flow, /is_water\(atomicLoad\(&field\[cell_index\(x, y \+ 1\)\]\)\)/,
+    "flat flow must require water above");
   assert.match(flow, /return vec2i\(0, 0\)/, "and it must be able to stop, or a pool churns for ever");
 
   // The water branch has to come before the cohesion test, which would
@@ -282,9 +290,8 @@ test("the shader agrees that water holds nothing up", () => {
   const solid = body("solid_at");
   assert.ok(solid, "solid_at is missing from the shader");
   assert.match(solid, /is_water\(/, "water must not be counted as support");
-  for (const caller of ["support_count", "is_held"]) {
-    assert.match(body(caller), /solid_at\(/, `${caller} must go through solid_at`);
-  }
+  assert.doesNotMatch(solid, /is_void\(/, "but the placeholder bears load, so it is counted");
+  assert.match(body("is_held"), /solid_at\(/, "is_held must go through solid_at");
 });
 
 test("sand and water trade places, and exactly one of them may have the cell", () => {
@@ -320,6 +327,31 @@ test("sand and water trade places, and exactly one of them may have the cell", (
   // a pool that has run out, or a flooded world would stop sinking exactly when
   // it was busiest.
   assert.ok(emit.indexOf("displaces_water(") < budget, "the trade happens before the pool budget");
+});
+
+test("the shader's Counters struct is laid out in the order counters.js decodes", () => {
+  const struct = simulation.match(/struct Counters \{([\s\S]*?)\};/)?.[1] ?? "";
+  const fields = [...struct.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
+  const expected = COUNTER_WORDS.map((name) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`));
+  assert.deepEqual(fields, expected);
+});
+
+test("prepare resets every per-frame counter", () => {
+  // A counter left out of the reset accumulates across frames and reads as a
+  // rate that grows without bound — `sank` did exactly that when it was added.
+  const prepare = body("prepare");
+  for (const name of PER_FRAME_COUNTERS) {
+    const snake = name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+    assert.ok(prepare.includes(`atomicStore(&counters.${snake}, 0u)`), `${name} is not reset`);
+  }
+  assert.doesNotMatch(prepare, /counters\.gold/, "gold is a score, not a rate");
+});
+
+test("granular material sinks regardless of its neighbours; stone is held by them", () => {
+  const sink = body("displaces_water");
+  assert.ok(sink, "displaces_water is missing from the shader");
+  assert.match(sink, /bond_of\(word\) >= params\.rubble_bond/, "rubble and looser must always sink");
+  assert.match(sink, /!is_held\(x, y, /, "anything stronger sinks only if nothing holds it");
 });
 
 test("a lemming drowns on contact with water", () => {
@@ -422,7 +454,7 @@ test("a pixel checks what is under it one last time before settling", () => {
   // whose interior satisfies its own bond, which then hangs there for good.
   const settle = simulation.match(/\nfn\s+settle\([\s\S]*?\n\}/)?.[0] ?? "";
   const check = settle.indexOf("open_at(x, y - 1)");
-  const deposit = settle.indexOf("atomicCompareExchangeWeak");
+  const deposit = settle.indexOf("claim_cell(p.last_cell");
   assert.ok(check >= 0, "settle must look at the cell underneath");
   assert.ok(check < deposit, "and it must look before it commits");
 });
@@ -503,7 +535,7 @@ test("the pointer brush is a smudge unless it has no direction", () => {
   const smudgeable = simulation.match(/\nfn\s+smudgeable\([\s\S]*?\n\}/)?.[0] ?? "";
   assert.ok(smudgeable, "smudgeable is missing from the shader");
   assert.match(smudgeable, /bond == 0u\) \{ return false/, "a smudge must not shift bedrock");
-  assert.match(smudgeable, /support_count\(x, y\)\) - i32\(bond\) <= SMUDGE_REACH/,
+  assert.match(smudgeable, /cover_count\(x, y\)\) - i32\(bond\) <= SMUDGE_REACH/,
     "and must only take material with little support to spare");
 });
 
@@ -546,4 +578,87 @@ test("a lost lemming is replaced rather than simply gone", () => {
   const step = simulation.match(/\nfn\s+step_agents\([\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(step, /AGENT_RESPAWN/, "death must leave a countdown");
   assert.match(step, /waiting > 1u/, "which is ticked down");
+});
+
+// --- The placeholder ---------------------------------------------------------
+
+test("the shader agrees on what the placeholder is", () => {
+  assert.equal(Number(simulation.match(/const\s+VOID_BIT\s*:\s*u32\s*=\s*(0x[0-9a-f]+)u/)?.[1]), VOID_BIT);
+  assert.equal(Number(simulation.match(/const\s+VOID_CELL\s*:\s*u32\s*=\s*(0x[0-9a-f]+)u/)?.[1]), VOID_CELL);
+  assert.equal(MATERIAL_MASK & VOID_BIT, 0, "and that a pixel never carries it");
+});
+
+test("the placeholder stops nothing but holds everything up", () => {
+  // The two questions have different answers. `blocked_at` and `open_at` are
+  // what a moving pixel, water and a lemming ask; `solid_at` is what cohesion
+  // asks. A tunnel is open to the first and present to the second.
+  assert.match(body("blocked_at"), /!is_void\(word\)/, "a pixel passes through it");
+  assert.match(body("open_at"), /is_void\(word\)/, "it is somewhere to fall");
+  assert.doesNotMatch(body("solid_at"), /is_void/, "and it holds the roof up");
+});
+
+test("neither an impact nor the brush counts the placeholder as cover", () => {
+  // What resists a blow and what the brush has to reach through is the matter
+  // packed round a cell, not the shape of the tunnel it lines. Otherwise every
+  // cave wall reads as buried eight deep: unsmudgeable and unsplashable.
+  const cover = body("covered_at");
+  assert.ok(cover, "covered_at is missing from the shader");
+  assert.match(cover, /is_void\(word\)/);
+  assert.match(cover, /is_water\(word\)/);
+  assert.match(body("smudgeable"), /cover_count\(/);
+  assert.match(body("strike"), /cover_count\(/);
+  assert.doesNotMatch(simulation, /\bsupport_count\(/, "the old load-bearing count must be gone");
+});
+
+test("the placeholder is never released: not by cohesion, the brush or a blast", () => {
+  const emit = body("emit");
+  assert.match(emit, /if \(value == 0u \|\| is_void\(value\)\) \{ return; \}/);
+});
+
+test("a pixel coming to rest in the placeholder replaces it", () => {
+  // "Becomes whatever perturbs it." Both deposits go through one claim that
+  // accepts empty space or the placeholder, each with its own compare-exchange
+  // so that losing a race for either leaves nothing half-done.
+  const claim = body("claim_cell");
+  assert.ok(claim, "claim_cell is missing from the shader");
+  assert.match(claim, /atomicCompareExchangeWeak\(&field\[c\], 0u, deposit\)/);
+  assert.match(claim, /atomicCompareExchangeWeak\(&field\[c\], VOID_CELL, deposit\)/);
+  assert.match(body("settle"), /claim_cell\(p\.last_cell, deposit\)/);
+  assert.match(body("deposit_into"), /claim_cell\(/);
+  assert.doesNotMatch(body("settle"), /atomicCompareExchangeWeak\(&field\[p\.last_cell\], 0u/,
+    "settle must not bypass the claim");
+});
+
+// --- Digging and gold --------------------------------------------------------
+
+test("a lemming digs by turning cells into the placeholder, not by releasing them", () => {
+  const dig = body("dig_cell");
+  assert.ok(dig, "dig_cell is missing from the shader");
+  assert.match(dig, /atomicCompareExchangeWeak\(&field\[c\], value, VOID_CELL\)/, "the tunnel is placeholder");
+  assert.doesNotMatch(dig, /pop_budget|free_ring|particles\[/, "and costs the pool nothing");
+  assert.match(dig, /is_water\(value\)/, "water is not dug");
+  assert.match(dig, /bond_of\(value\) == 0u/, "bedrock is beyond a lemming");
+  assert.match(dig, /is_gold\(value\)[\s\S]*?counters\.gold/, "gold dug through is gold mined");
+
+  const step = body("step_agents");
+  const digging = step.slice(step.indexOf("mode == MODE_DIG"), step.indexOf("} else {", step.indexOf("mode == MODE_DIG")));
+  assert.match(digging, /dig_cell\(/);
+  assert.doesNotMatch(digging, /release_cell\(/, "digging must not go through the pool");
+  assert.match(step, /release_cell\(/, "the bomb still does");
+});
+
+test("a tunnel is one cell bigger than the lemming: its height plus headroom, two columns ahead", () => {
+  const step = body("step_agents");
+  const digging = step.slice(step.indexOf("mode == MODE_DIG"), step.indexOf("} else {", step.indexOf("mode == MODE_DIG")));
+  assert.match(digging, /for \(var dy = 0; dy <= AGENT_HEIGHT; dy \+= 1\)/, "the body's rows and one above");
+  assert.match(digging, /for \(var step = 1; step <= 2; step \+= 1\)/, "the column ahead and the one beyond");
+  assert.match(digging, /x \+ facing \* step, y \+ dy/);
+});
+
+test("the shader recognises gold by the same colour the palette does", () => {
+  const gold = body("is_gold");
+  assert.ok(gold, "is_gold is missing from the shader");
+  assert.match(gold, new RegExp(`r >= ${GOLD_MIN_RED}u`));
+  assert.match(gold, new RegExp(`g >= ${GOLD_MIN_GREEN}u`));
+  assert.match(gold, new RegExp(`b <= ${GOLD_MAX_BLUE}u`));
 });

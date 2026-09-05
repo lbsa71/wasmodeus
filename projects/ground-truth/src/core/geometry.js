@@ -4,6 +4,8 @@
  * the world" (the fountain intake) is the first few rows.
  */
 
+import { blocks } from "./field-format.js";
+
 /** Sentinel `last_cell` for a particle that is above the world, i.e. in flight. */
 export const SKY_CELL = 0xffffffff;
 
@@ -29,7 +31,8 @@ export function inBounds(x, y, width, height) {
 
 /**
  * Collision test used by the integrator. The side walls and the floor are
- * solid; the sky above the world is open so a fountain jet can overshoot.
+ * solid; the sky above the world is open so a fountain jet can overshoot. The
+ * black placeholder that tunnels are made of is open too: see `VOID_CELL`.
  *
  * @param {ArrayLike<number>} field
  * @param {number} x @param {number} y @param {number} width @param {number} height
@@ -39,7 +42,7 @@ export function isBlocked(field, x, y, width, height) {
   if (x < 0 || x >= width) return true;
   if (y < 0) return true;
   if (y >= height) return false;
-  return field[cellIndex(x, y, width)] !== 0;
+  return blocks(field[cellIndex(x, y, width)]);
 }
 
 /**

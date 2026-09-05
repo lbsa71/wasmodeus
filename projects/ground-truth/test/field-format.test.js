@@ -9,6 +9,11 @@ import {
   BOND_MASK,
   MATERIAL_MASK,
   MAX_BOND,
+  VOID_BIT,
+  VOID_CELL,
+  WATER_BOND,
+  blocks,
+  isVoid,
   cellBond,
   cellColor,
   clearDislodged,
@@ -97,4 +102,25 @@ test("the material mask keeps the colour and the bond and nothing else", () => {
 test("the colour mask leaves the bookkeeping bits alone", () => {
   assert.equal(COLOR_MASK & OCCUPIED_BIT, 0);
   assert.equal(COLOR_MASK & DISLODGE_BIT, 0);
+});
+
+test("the placeholder is a real cell that is nothing", () => {
+  // Underground emptiness is not absence. It is a cell that is present — so
+  // a tunnel keeps its shape and holds its own roof up — but black, with no
+  // colour and no bond, and never carried anywhere: it is what a moving pixel
+  // replaces when it comes to rest.
+  assert.equal(isOccupied(VOID_CELL), true, "present, so it counts as a neighbour");
+  assert.equal(isVoid(VOID_CELL), true);
+  assert.equal(cellColor(VOID_CELL), 0, "and black");
+  assert.equal(cellBond(VOID_CELL), 0);
+  assert.equal(MATERIAL_MASK & VOID_BIT, 0, "a pixel never carries it");
+  assert.equal(VOID_BIT & (OCCUPIED_BIT | BOND_MASK | COLOR_MASK | DISLODGE_BIT), 0, "it has a bit of its own");
+});
+
+test("what blocks a pixel is anything present except the placeholder", () => {
+  assert.equal(blocks(EMPTY), false);
+  assert.equal(blocks(VOID_CELL), false, "a pixel falls straight through a tunnel");
+  assert.equal(blocks(packCell(1, 2, 3, 2)), true);
+  assert.equal(blocks(packCell(1, 2, 3, WATER_BOND)), true, "water blocks even though it holds nothing up");
+  assert.equal(isVoid(packCell(0, 0, 0, 0)), false, "black bedrock is not the placeholder");
 });

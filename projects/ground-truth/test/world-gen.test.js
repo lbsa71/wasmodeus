@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createCaveWorld, settleBonds, surfaceProfile } from "../src/core/world-gen.js";
+import { createCaveWorld, settleBonds, sprinkleGold, surfaceProfile } from "../src/core/world-gen.js";
 import { cellIndex } from "../src/core/geometry.js";
-import { WATER_BOND, cellBond, isOccupied, packCell, unpackCell } from "../src/core/field-format.js";
+import { VOID_CELL, WATER_BOND, cellBond, isOccupied, isVoid, packCell, unpackCell } from "../src/core/field-format.js";
 import { neighbourSupport } from "../src/core/sand.js";
-import { MATERIALS } from "../src/core/palette.js";
+import { MATERIALS, isGold } from "../src/core/palette.js";
 
 // Small enough to be quick, large enough that every feature still appears —
 // the generator sizes everything as a fraction of the world for exactly this
@@ -50,7 +50,7 @@ test("settling weakens only what it must, so material keeps its character", () =
   // cells are buried interior rock and should still carry the palette's bond.
   const bonds = new Map();
   for (const word of world) {
-    if (!isOccupied(word)) continue;
+    if (!isOccupied(word) || isVoid(word)) continue;
     const bond = cellBond(word);
     bonds.set(bond, (bonds.get(bond) ?? 0) + 1);
   }
@@ -81,7 +81,7 @@ test("there are caves: open space well below the surface", () => {
     const deepest = Math.floor(profile[x]) - Math.round(WORLD.height * 0.10);
     for (let y = Math.round(WORLD.height * 0.06); y < deepest; y += 1) {
       underground += 1;
-      if (!isOccupied(at(x, y))) hollow += 1;
+      if (isVoid(at(x, y))) hollow += 1;
     }
   }
   const carved = hollow / underground;
@@ -102,7 +102,7 @@ test("the world spans the range from bedrock to dry sand", () => {
   let weak = 0;
   let solid = 0;
   for (const word of world) {
-    if (!isOccupied(word)) continue;
+    if (!isOccupied(word) || isVoid(word)) continue;
     solid += 1;
     // Anything needing four or more neighbours runs once it is disturbed.
     if (cellBond(word) >= MATERIALS.dirt.bond) weak += 1;
@@ -186,4 +186,91 @@ test("the world is seamed with water, and it is water that can never be held", (
   }
   assert.ok(water > 50, `only ${water} cells of water in the whole world`);
   assert.ok(WATER_BOND > 8, "eight neighbours must not be able to satisfy it");
+});
+
+test("underground emptiness is the placeholder; only the sky is truly empty", () => {
+  // Every hollow below the skyline is made of the black placeholder, which is
+  // present — so a cave roof counts it as a neighbour and stays up — but stops
+  // nothing. Above the skyline the world is genuinely empty.
+  const profile = surfaceProfile({ ...WORLD, seed: 5 });
+  let hollow = 0;
+  for (let x = 0; x < WORLD.width; x += 1) {
+    const skyline = Math.floor(profile[x]);
+    for (let y = 0; y < skyline; y += 1) {
+      const word = at(x, y);
+      assert.notEqual(word, 0, `${x},${y} is a hole in the world rather than a tunnel`);
+      if (isVoid(word)) hollow += 1;
+    }
+    for (let y = skyline + Math.round(WORLD.height * 0.032) + 2; y < WORLD.height; y += 1) {
+      assert.equal(isVoid(at(x, y)), false, `the sky at ${x},${y} is made of placeholder`);
+    }
+  }
+  assert.ok(hollow > 0, "there are no caves at all");
+});
+
+test("the world is sprinkled with gold, in the rock, where there was stone", () => {
+  let gold = 0;
+  const profile = surfaceProfile({ ...WORLD, seed: 5 });
+  for (let y = 0; y < WORLD.height; y += 1) {
+    for (let x = 0; x < WORLD.width; x += 1) {
+      const word = at(x, y);
+      if (!isOccupied(word) || !isGold(word)) continue;
+      gold += 1;
+      assert.ok(y < profile[x], `gold at ${x},${y} is above ground`);
+      assert.ok(cellBond(word) <= MATERIALS.gold.bond, "gold keeps its own bond or is pinned lower");
+    }
+  }
+  // A tiny test world gets the minimum handful of nuggets, most of which land
+  // near the soil where only their stone-facing halves take.
+  assert.ok(gold > 10, `only ${gold} cells of gold in the whole world`);
+});
+
+test("gold only ever replaces stone: never soil, water, caves or bedrock", () => {
+  const size = { width: 32, height: 32 };
+  const field = /** @type {import("../src/core/field-format.js").Field} */ (
+    new Uint32Array(new ArrayBuffer(size.width * size.height * 4))
+  );
+  const stone = packCell(78, 80, 92, 2);
+  const sand = packCell(176, 152, 104, 5);
+  const water = packCell(58, 132, 208, WATER_BOND);
+  for (let y = 0; y < 24; y += 1) {
+    for (let x = 0; x < size.width; x += 1) {
+      field[cellIndex(x, y, size.width)] = y < 4 ? packCell(1, 1, 1, 0) : (y < 16 ? stone : sand);
+    }
+  }
+  for (let x = 8; x < 12; x += 1) field[cellIndex(x, 10, size.width)] = water;
+  for (let x = 12; x < 16; x += 1) field[cellIndex(x, 10, size.width)] = VOID_CELL;
+  const profile = new Float32Array(size.width).fill(24);
+  const sprinkled = sprinkleGold(field, { ...size, seed: 9 }, profile, { nuggets: 40, radius: [3, 5] });
+  let gold = 0;
+  for (let i = 0; i < sprinkled.length; i += 1) {
+    if (!isGold(sprinkled[i])) {
+      assert.equal(sprinkled[i], field[i], `cell ${i} was changed into something other than gold`);
+      continue;
+    }
+    gold += 1;
+    assert.equal(field[i], stone, `gold at cell ${i} replaced something other than stone`);
+  }
+  assert.ok(gold > 0, "forty nuggets and no gold");
+});
+
+test("most nuggets lie shallow, so a lemming can strike one without being led", () => {
+  // Uniform in depth would put half the gold a long dig down. Bias it towards
+  // the surface: some is easy, some takes leading a crew all the way.
+  const size = { width: 64, height: 400 };
+  const field = /** @type {import("../src/core/field-format.js").Field} */ (
+    new Uint32Array(new ArrayBuffer(size.width * size.height * 4))
+  );
+  for (let i = 0; i < field.length; i += 1) field[i] = packCell(78, 80, 92, 2);
+  const profile = new Float32Array(size.width).fill(size.height - 1);
+  const sprinkled = sprinkleGold(field, { ...size, seed: 3 }, profile, { nuggets: 300, radius: [0, 0] });
+  const depths = [];
+  for (let y = 0; y < size.height; y += 1) {
+    for (let x = 0; x < size.width; x += 1) if (isGold(sprinkled[cellIndex(x, y, size.width)])) depths.push(y);
+  }
+  depths.sort((a, b) => a - b);
+  assert.ok(depths.length > 100, `only ${depths.length} nuggets landed`);
+  const median = depths[Math.floor(depths.length / 2)];
+  assert.ok(median > size.height * 0.6, `median nugget height ${median} of ${size.height} is not shallow`);
+  assert.ok(depths[0] < size.height * 0.25, "but some gold must still be deep");
 });

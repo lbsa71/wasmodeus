@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { COUNTERS_BYTES, COUNTER_WORDS, counterIndex, decodeCounters } from "../src/core/counters.js";
+import { COUNTERS_BYTES, COUNTER_WORDS, PER_FRAME_COUNTERS, counterIndex, decodeCounters } from "../src/core/counters.js";
 
 /** @param {Record<string, number>} values */
 function block(values) {
@@ -66,4 +66,9 @@ test("crowding and burial are counted separately", () => {
 
 test("an unknown counter name is a programming error, not a silent zero", () => {
   assert.throws(() => counterIndex("nope"), /Unknown counter/);
+});
+
+test("gold mined is a score, not a rate: it is never reset by a frame", () => {
+  assert.ok(COUNTER_WORDS.includes("gold"));
+  assert.equal(PER_FRAME_COUNTERS.includes("gold"), false);
 });

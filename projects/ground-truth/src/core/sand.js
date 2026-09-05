@@ -21,7 +21,8 @@
  * Mirrored by `support_at` and `neighbour_support` in
  * `src/gpu/shaders/simulation.wgsl`.
  */
-import { cellBond, isWater } from "./field-format.js";
+import { cellBond, isOccupied, isVoid, isWater } from "./field-format.js";
+import { RUBBLE_BOND } from "./palette.js";
 import { cellIndex, inBounds, isBlocked } from "./geometry.js";
 import { random01 } from "./prng.js";
 
@@ -31,6 +32,18 @@ export const SUPPORT_FIRM = 0;
 export const SUPPORT_FALL = 1;
 /** Standing on solid ground with an open diagonal. Slumps, given the chance. */
 export const SUPPORT_SLUMP = 2;
+
+/**
+ * The bond at which material stops being a solid and becomes grains.
+ *
+ * Anything that needs as many neighbours as rubble does — rubble, dirt, sand,
+ * gravel — is a granular material. On land its bond is what holds a heap
+ * together. In water it has no cohesion at all: a raft of sand does not float
+ * because its grains are touching, it sinks grain by grain. Stone, needing two,
+ * is a solid and keeps its cohesion — a rock ledge over a flooded pocket stays a
+ * ledge.
+ */
+export const GRANULAR_BOND = RUBBLE_BOND;
 
 /**
  * Whether a neighbouring cell holds anything up.
@@ -45,6 +58,12 @@ export const SUPPORT_SLUMP = 2;
  * cohesion test the grain already runs answers "not held", so it lets go, and
  * the only new rule needed is what it does then: see {@link displacesWater}.
  *
+ * **The placeholder holds everything up.** It is water's mirror image: it stops
+ * nothing, but it bears load, which is what keeps a tunnel's roof where it is.
+ * So this is deliberately not {@link isBlocked} — the two questions "can a
+ * pixel move into it?" and "does it hold its neighbours?" have different
+ * answers for both of those materials.
+ *
  * @param {ArrayLike<number>} field
  * @param {number} x @param {number} y
  * @param {{ width: number, height: number }} world
@@ -52,9 +71,10 @@ export const SUPPORT_SLUMP = 2;
  */
 export function isSupporting(field, x, y, world) {
   const { width, height } = world;
-  if (!isBlocked(field, x, y, width, height)) return false;
-  if (!inBounds(x, y, width, height)) return true;
-  return !isWater(field[cellIndex(x, y, width)]);
+  if (x < 0 || x >= width || y < 0) return true;
+  if (y >= height) return false;
+  const word = field[cellIndex(x, y, width)];
+  return isOccupied(word) && !isWater(word);
 }
 
 /**
@@ -142,8 +162,8 @@ export function releases(support, chance, seed) {
 }
 
 /**
- * Where water goes next: straight down, then down-diagonally, then flat
- * sideways.
+ * Where water goes next: straight down, then down-diagonally, then — under
+ * pressure — flat sideways.
  *
  * That last step is the whole difference between water and sand. Sand needs an
  * opening *below* something before it will move, which is why it heaps; water
@@ -151,6 +171,12 @@ export function releases(support, chance, seed) {
  * its own level and then stops. Stopping matters as much as moving: with
  * nowhere to go it stays exactly where it is, which is what makes a still pool
  * still rather than a permanent churn.
+ *
+ * "Under pressure" means water directly above. Without that condition the
+ * surface of every pool is a partial row of cells each with an open side, and
+ * they slide back and forth for ever; with it a lone film of water is already
+ * level, and a pool levels itself from below as buried cells are squeezed out
+ * sideways and the cells above them drop.
  *
  * @param {ArrayLike<number>} field
  * @param {number} x @param {number} y
@@ -166,6 +192,8 @@ export function waterFlow(field, x, y, world, seed) {
   const downLeft = open(-1, -1);
   const downRight = open(1, -1);
   if (downLeft || downRight) return { x: chooseDirection(downLeft, downRight, seed), y: -1 };
+  const above = y + 1 < height && isWater(field[cellIndex(x, y + 1, width)]);
+  if (!above) return { x: 0, y: 0 };
   const left = open(-1, 0);
   const right = open(1, 0);
   if (left || right) return { x: chooseDirection(left, right, seed), y: 0 };
@@ -177,11 +205,12 @@ export function waterFlow(field, x, y, world, seed) {
  * what sinking is. Sand and water simply switch: the grain takes the cell below
  * and the water takes the cell it left, one cell a frame, conserving both.
  *
- * There is no new question of *whether*. Cohesion already decides that, and
- * because {@link isSupporting} discounts water the answer for anything resting
- * on a pool is "nothing is holding this" — so a grain goes under and a rock
- * ledge with neighbours of its own does not. Bedrock is asked for no
- * neighbours at all, so it is held by definition and stands in the water.
+ * Granular material always sinks: see {@link GRANULAR_BOND}. For a solid the
+ * question is the one cohesion already answers, and because
+ * {@link isSupporting} discounts water the answer for a lone stone resting on
+ * a pool is "nothing is holding this" — it goes under — while a rock ledge with
+ * neighbours of its own does not. Bedrock is asked for no neighbours at all,
+ * so it is held by definition and stands in the water.
  *
  * @param {ArrayLike<number>} field
  * @param {number} x @param {number} y
@@ -192,9 +221,11 @@ export function displacesWater(field, x, y, world) {
   const { width, height } = world;
   if (!inBounds(x, y, width, height) || !inBounds(x, y - 1, width, height)) return false;
   const word = field[cellIndex(x, y, width)];
-  if (word === 0 || isWater(word)) return false;
+  if (word === 0 || isWater(word) || isVoid(word)) return false;
   if (!isWater(field[cellIndex(x, y - 1, width)])) return false;
-  return !isHeld(neighbourSupport(field, x, y, world).total, cellBond(word));
+  const bond = cellBond(word);
+  if (bond >= GRANULAR_BOND) return true;
+  return !isHeld(neighbourSupport(field, x, y, world).total, bond);
 }
 
 /**

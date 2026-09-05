@@ -13,6 +13,25 @@ Everything runs on the GPU. There is no per-particle CPU work at all — the onl
 thing read back each frame is a 48-byte counter block, and even that is read
 without blocking.
 
+## Two properties, and the two materials that have only one
+
+Every cell in the world answers two questions, and for almost everything the
+answers are the same: **does it stop a moving pixel**, and **does it hold its
+neighbours up**. Rock does both. Empty sky does neither. Two materials do
+exactly one, and between them they account for most of what happens
+underground:
+
+| | blocks a pixel | bears load |
+| --- | --- | --- |
+| rock, soil, sand, gold | yes | yes |
+| **water** | yes | **no** — so things sink through it |
+| **the placeholder** | **no** — so things fall through it | yes — so tunnels keep their roofs |
+| sky | no | no |
+
+`blocked_at` and `open_at` answer the first question; `solid_at` answers the
+second. Keeping them separate is what lets water and the placeholder exist at
+all.
+
 ## Cohesion
 
 Every cell carries a **bond**: how many of its eight neighbours it needs in
@@ -78,11 +97,20 @@ every frame it has anywhere to go.
 What is genuinely new is one rule about **which way** it goes:
 
 - **Anything open below** → down, then a down-diagonal, exactly like sand.
-- **Boxed in below** → *sideways along the flat*. This is the whole difference
-  between water and sand, and it is what lets a pool find its level instead of
-  standing up in a heap.
+- **Boxed in below, with water above** → *sideways along the flat*. This is the
+  whole difference between water and sand, and it is what lets a pool find its
+  level instead of standing up in a heap.
 - **Nowhere at all** → it stays put. Without that last line a still pool churns
   for ever, because every cell in it would keep claiming a slot to go nowhere.
+
+"With water above" is the pressure condition, and it was learned the hard way.
+Without it the surface of every pool is a partial row of cells each with an
+open side, and they slide back and forth for ever — ninety-odd pixels
+permanently in flight over a tank that should have been at rest. With it a film
+one cell deep is already level, and a pool levels itself from below: buried
+cells are squeezed out sideways and the cells above them drop. A sealed tank of
+6 300 cells of water comes to complete rest — zero pixels in motion — within a
+hundred frames.
 
 Three consequences had to be handled explicitly:
 
@@ -96,16 +124,89 @@ Three consequences had to be handled explicitly:
   to come to rest on top of other water, which is how a shaft fills from the
   bottom.
 
-Seam water drains and pools on its own: 27 827 cells of it are laid down in
-seams, and 400 frames later it has found the cavern floors and gone still bar
-the edges — flow falls from 759 cells a frame to under a hundred as the pools
-level off.
+Seam water drains and pools on its own: 33 896 cells of it are laid down in
+seams, and it finds the cavern floors and goes still: with nobody digging, the
+seams have drained by 900 frames and the whole world is at rest — no water
+moving, nothing falling, only the entombed residue still holding slots. In a world
+with lemmings in it the flow never quite reaches zero, and that is the lemmings:
+every tunnel that breaks into a seam is a new outlet.
+
+### Sinking
+
+Sand sinks through water, and the mechanism is the second row of the table
+above: **water holds nothing up.** A grain resting on a pool has three water
+cells beneath it, and counting those as support is exactly what made sand float
+on water like a raft. Discount them and the cohesion test the grain was already
+running answers "not held" all by itself.
+
+What it does then is the one new rule. A cell with water directly beneath it
+**trades places with it**: the grain takes the cell below, the water takes the
+cell it left, one cell a frame, both conserved. No pool slot is involved — two
+field cells simply exchange contents — so sinking carries on working in a world
+whose pool has run dry. It is the only place in the simulation where anything
+writes a cell other than its own, so the cell below is *claimed* with a
+compare-exchange rather than stored into: the water's own invocation may be
+releasing it in the same pass, and exactly one of the two may have it. For the
+same reason every release in `emit` now claims its cell before it spends
+anything from the pool, so a loser costs nothing and leaves nothing half-done.
+
+Granular material — anything that needs as many neighbours as rubble does —
+**always** sinks. On land that bond is what holds a heap together; in water it
+has no cohesion at all. Gate sinking on cohesion instead and a slab of sand
+floats on its own bottom row's neighbours, and loose sand knits into a crust on
+the surface and floats too: 183 grains sitting on water after 600 frames,
+measured. Stone keeps its cohesion, so a rock ledge over a flooded pocket stays
+a ledge, while a lone stone dropped in a pool goes under. Bedrock is asked for
+no neighbours at all, so it is held by definition and stands in the water.
+
+In a sealed tank: a slab of 720 grains eight deep goes from the surface to
+exactly the floor, the 6 300 cells of water rise by exactly eight rows, a loose
+scatter of 648 grains all reach the bottom, and matter is conserved to the cell.
 
 **Lemmings drown.** Water is checked before the debris test, and it is fatal on
 contact — a lemming caught by a flood does not decohere into a spray of its own
 pixels the way one crushed by falling rock does, it simply goes under, so there
 is nothing to release. Dropped into a flooded seam, 351 of 600 went under in a
 single frame; the same 600 on dry ground lost none over sixty frames.
+
+## The placeholder
+
+A tunnel is not the absence of pixels. Underground, emptiness is made of a
+**black placeholder**: a cell that is present — it counts as a neighbour, so a
+cave roof rests on it and a tunnel a lemming digs keeps its shape — but that
+stops nothing. A pixel falls straight through it to the real floor, water runs
+along it, a lemming walks through it, and whatever comes to rest in it
+*replaces* it. It is black, has no colour and no bond, and is never carried
+anywhere. Only the sky above the skyline is truly empty.
+
+It is water's mirror image, and that symmetry is the whole design: water
+blocks and bears nothing, the placeholder bears and blocks nothing. Both fall
+out of keeping "can a pixel move into it?" separate from "does it hold its
+neighbours?".
+
+Generation carves the caves and then fills every hollow below the skyline with
+it — last, so the passes that grow moss and vines can still tell a cave from a
+wall. A world of twenty-one million cells has about five million of placeholder,
+and not one genuinely empty cell under the ground.
+
+Three things had to be told about it explicitly:
+
+- **Settling claims either.** A pixel comes to rest in empty space or in the
+  placeholder, and each is its own compare-exchange, so losing a race for either
+  leaves nothing half-done. "Becomes whatever perturbs it" is that one function.
+- **It is never released.** Neither cohesion, the brush nor a blast can move it:
+  a tunnel is not material.
+- **Impacts and the brush do not count it as cover.** What resists a blow and
+  what the brush has to reach through is the matter packed round a cell, not
+  the shape of the tunnel it lines. Count the placeholder and every cave wall
+  reads as buried eight deep — unsmudgeable, and too well packed for any impact
+  to splash.
+
+A blast is different from digging on purpose: it leaves *real* emptiness
+behind, so the crater's walls lose their neighbours and collapse exactly as
+before. Measured: a blast in a cave wall brings down 1 107 cells over the next
+ninety frames; 30 000 cells of lemming tunnels over ten seconds bring down
+3 000, most of those from the bombs.
 
 ## Lemmings
 
@@ -125,9 +226,17 @@ pool — the creature decoheres into its own pixels and they fall, pile and sett
 like anything else. It is the same bargain the rest of the simulation makes:
 hold together until something takes you apart.
 
-Digging and detonating both **pop free slots from the same pool budget the world
-uses**, which is why `step_agents` runs before `emit` rather than after. A
-lemming that cannot find a slot simply waits a frame.
+**Digging turns cells into the placeholder.** Nothing is released and nothing
+is spent from the pool: the tunnel keeps its shape, holds its own roof up, and
+stays. A tunnel is one cell bigger than the lemming in every direction it can
+be — its own height plus headroom, cut two columns ahead so the working face is
+always clear of the sprite. Bedrock is beyond a lemming, and water is not dug
+but drowned in. Six hundred of them excavate fifty to ninety cells a frame.
+
+Detonating is the one thing a lemming does that **pops free slots from the
+same pool budget the world uses**, which is why `step_agents` runs before
+`emit` rather than after. A bomb leaves real emptiness, not placeholder, so
+what it undermines comes down.
 
 ### Two markers in the overlay
 
@@ -145,7 +254,33 @@ Lost lemmings are replaced after a delay. Without that the population only ever
 falls — a bomb kills the bomber and the debris takes its neighbours — and the
 world goes quiet inside half a minute. Measured over 1 700 frames it holds
 steady: 600 spawned, 534 alive after 500 frames, 540 after 1 700, with around a
-hundred digging at any moment and forty-five cells excavated a frame.
+hundred digging at any moment.
+
+## Gold
+
+The world is sprinkled with **gold**, and the score is how much of it lemmings
+have dug through. The readout at the top of the screen is the whole game so
+far: find a nugget, lead a crew to it — a smudged tunnel is a road — and let
+them mine it.
+
+Nuggets are compact discs rather than veins, because a vein is a thin line that
+vanishes when you zoom out and the whole point is that you can see gold from
+across the world. Fifty-odd of them, one per 400 000 cells, each replacing only
+stone — never soil, water, a cave or bedrock — so a nugget embedded in a cave
+wall shows its face to the cave and one under the ground has to be dug for.
+They are biased towards the surface: most are a short dig down, so a lemming
+left to itself strikes one now and then, while the deep ones take leading a
+crew all the way.
+
+Gold is the one material told apart by **what it looks like**. A pixel carries
+its colour and its bond and nothing else — the state word has no bit to spare
+for a material tag — so a nugget blown out of a wall and settled somewhere else
+can only still be gold if gold is recognised by its colour. The thresholds sit
+outside every other material's grain, and a test proves it stays that way.
+
+A crew placed beside a nugget and set digging mines 19 cells of it in forty
+frames. Six hundred lemmings left to wander for ten seconds mine none: the gold
+is there to be led to.
 
 ## The brush
 
@@ -294,8 +429,10 @@ hundred frames while the slower bond-driven collapse carries on behind it.
 6144 × 3456 cells — about twenty-one million, some six times the area of a
 1080p screen at 1:1. A rolling surface with soil, sand lenses, grass and trees;
 a tunnel-and-cavern system carved out of the rock beneath it; moss, glowcaps,
-mushrooms and hanging vines lining the caves; ore veins and water seams; and pockets
-of loose spoil buried in the stone that run like sand the moment you breach one.
+mushrooms and hanging vines lining the caves; ore veins, water seams and nuggets
+of gold; and pockets of loose spoil buried in the stone that run like sand the
+moment you breach one. Every hollow below the skyline is made of the black
+placeholder, not of nothing.
 
 It is a pure function of its seed, and every feature size is a fraction of the
 world rather than a pixel count — a fixed size looks like a cave system at one
@@ -369,6 +506,8 @@ Requires a browser with WebGPU.
 | `dug/f` | cells excavated by lemmings this frame |
 | `flowing/f` | water cells that moved this frame; falls to near zero as pools level |
 | `drowned/f` | lemmings lost to water this frame |
+| `sank/f` | cells that traded places with the water beneath them this frame |
+| `gold mined` | the score: cells of gold lemmings have dug through, ever |
 | `view` / `zoom` | where the camera is and how far in |
 
 ## Layout
@@ -390,7 +529,7 @@ prepare  →  integrate ×4  →  advance  →  settle  →  step_agents
 ```
 
 `settle` only ever **pushes** to the free-slot ring; `emit` and `step_agents`
-only ever **pop** from it. Because they are separate dispatches, a slot can never be
+(for a bomb — digging costs nothing) only ever **pop** from it. Because they are separate dispatches, a slot can never be
 handed to two pixels at once — no compare-and-swap on the ring is needed. `emit`
 claims from a pop budget snapshotted by `prepare`, so its head index can never
 overrun the tail.

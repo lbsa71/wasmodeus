@@ -8,7 +8,7 @@
  *
  * All of it is a pure function of the seed.
  */
-import { WATER_BOND, cellBond, isOccupied, packCell, withBond } from "./field-format.js";
+import { VOID_CELL, WATER_BOND, cellBond, isOccupied, isVoid, packCell, withBond } from "./field-format.js";
 import { cellIndex } from "./geometry.js";
 import { neighbourSupport } from "./sand.js";
 import { MATERIALS } from "./palette.js";
@@ -156,9 +156,95 @@ export function createCaveWorld({ width, height, seed = 1 }) {
     }
   }
 
-  growSurface(field, { width, height, seed }, profile);
-  growCaves(field, { width, height, seed }, profile);
-  return settleBonds(field, { width, height });
+  const gilded = sprinkleGold(field, { width, height, seed }, profile);
+  growSurface(gilded, { width, height, seed }, profile);
+  growCaves(gilded, { width, height, seed }, profile);
+  // Last, so the growth passes above can still tell a cave from a wall: they
+  // look for empty cells, and after this there are none below the skyline.
+  fillVoid(gilded, { width, height }, profile);
+  return settleBonds(gilded, { width, height });
+}
+
+/**
+ * How many nuggets a world gets, and how big. One per this many cells, so a
+ * bigger world has more to find rather than the same few spread thinner.
+ */
+const CELLS_PER_NUGGET = 400_000;
+const FEWEST_NUGGETS = 4;
+
+/**
+ * Nuggets of gold buried in the stone.
+ *
+ * Compact discs rather than veins: a vein is a thin line that vanishes when
+ * you zoom out, and the whole point of gold is that you can see it from across
+ * the world and lead lemmings to it. Each disc replaces only stone — never
+ * soil, water, a cave or bedrock — so a nugget embedded in a cave wall shows
+ * its face to the cave, and one under the ground has to be dug for.
+ *
+ * @param {import("./field-format.js").Field} field
+ * @param {{ width: number, height: number, seed: number }} world
+ * @param {Float32Array} profile the skyline
+ * @param {{ nuggets?: number, radius?: [number, number] }} [options]
+ * @returns {import("./field-format.js").Field} a new field; the input is untouched
+ */
+export function sprinkleGold(field, { width, height, seed }, profile, options = {}) {
+  const gilded = /** @type {import("./field-format.js").Field} */ (
+    new Uint32Array(new ArrayBuffer(field.length * 4))
+  );
+  gilded.set(field);
+  const nuggets = options.nuggets ?? Math.max(FEWEST_NUGGETS, Math.round((width * height) / CELLS_PER_NUGGET));
+  const [smallest, largest] = options.radius ?? [Math.max(2, Math.round(height * 0.0018)), Math.max(3, Math.round(height * 0.0048))];
+  const bedrockTop = Math.round(height * BEDROCK_LEVEL);
+  for (let k = 0; k < nuggets; k += 1) {
+    const roll = (/** @type {number} */ salt) => random01((k * 2654435761 + salt * 40503) ^ seed);
+    const cx = Math.floor(roll(1) * width);
+    // Anywhere in the rock between the bedrock and the soil, but biased
+    // towards the top: most nuggets are a short dig from the surface, so a
+    // lemming left to itself will strike one now and then, while the deep ones
+    // take leading a crew all the way down.
+    const ceiling = Math.floor(profile[cx]) - Math.round(height * 0.03);
+    const floor = bedrockTop + Math.round(height * 0.02);
+    if (ceiling <= floor) continue;
+    const shallowness = 1 - roll(2) * roll(2);
+    const cy = floor + Math.floor(shallowness * (ceiling - floor));
+    const radius = smallest + Math.floor(roll(3) * (largest - smallest + 1));
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        if (dx * dx + dy * dy > radius * radius) continue;
+        const x = cx + dx;
+        const y = cy + dy;
+        if (x < 0 || x >= width || y < 0 || y >= height) continue;
+        const index = cellIndex(x, y, width);
+        const word = field[index];
+        if (!isOccupied(word) || isVoid(word) || cellBond(word) !== MATERIALS.stone.bond) continue;
+        if (cellBond(word) === WATER_BOND) continue;
+        paint(gilded, index, MATERIALS.gold, index ^ (seed * 31));
+      }
+    }
+  }
+  return gilded;
+}
+
+/**
+ * Makes every hollow below the skyline out of the black placeholder.
+ *
+ * A cave is not a hole in the world. It is a cell that is present, so the
+ * roof over it counts it as a neighbour and stays up, but that stops nothing —
+ * a pixel falls through it to the floor, and water runs along it. Only the sky
+ * is genuinely empty. See `VOID_CELL` in `src/core/field-format.js`.
+ *
+ * @param {import("./field-format.js").Field} field modified in place
+ * @param {{ width: number, height: number }} world
+ * @param {Float32Array} profile the skyline
+ */
+export function fillVoid(field, { width }, profile) {
+  for (let x = 0; x < width; x += 1) {
+    const skyline = Math.floor(profile[x]);
+    for (let y = 0; y < skyline; y += 1) {
+      const index = cellIndex(x, y, width);
+      if (field[index] === 0) field[index] = VOID_CELL;
+    }
+  }
 }
 
 /**

@@ -1,3 +1,5 @@
+import { unpackCell } from "./field-format.js";
+
 /**
  * Materials the cave world is built from.
  *
@@ -34,6 +36,9 @@ export const MATERIALS = {
   stone: { rgb: [78, 80, 92], grain: 16, bond: 2 },
   paleStone: { rgb: [104, 106, 116], grain: 16, bond: 2 },
   ore: { rgb: [196, 158, 78], grain: 22, bond: 2 },
+  // Gold. Bright enough to spot from across the world, and a solid, so a
+  // nugget holds together until a lemming digs through it. See `isGold`.
+  gold: { rgb: [255, 214, 64], grain: 10, bond: 2 },
   // Water. Bond 15 is unmeetable, so it flows wherever there is anywhere to
   // flow to and stops only when there is not.
   water: { rgb: [58, 132, 208], grain: 14, bond: 15 },
@@ -56,3 +61,23 @@ export const MATERIALS = {
 
 /** Names of everything that grows, for the vegetation census in the tests. */
 export const VEGETATION = ["grass", "moss", "vine", "bark", "leaf", "capRed", "capViolet", "stalk", "glow"];
+
+/**
+ * Gold is the one material told apart by what it looks like.
+ *
+ * A pixel carries its colour and its bond and nothing else — the state word
+ * has no bit to spare for a material tag — so a nugget blown out of a wall and
+ * settled somewhere else can only still be gold if gold is recognised by its
+ * colour. These thresholds sit outside every other material's grain, and the
+ * palette test proves it stays that way. Mirrored by `is_gold` in
+ * `src/gpu/shaders/simulation.wgsl`.
+ */
+export const GOLD_MIN_RED = 236;
+export const GOLD_MIN_GREEN = 190;
+export const GOLD_MAX_BLUE = 96;
+
+/** @param {number} word @returns {boolean} */
+export function isGold(word) {
+  const { r, g, b } = unpackCell(word);
+  return r >= GOLD_MIN_RED && g >= GOLD_MIN_GREEN && b <= GOLD_MAX_BLUE;
+}

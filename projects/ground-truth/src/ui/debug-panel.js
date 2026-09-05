@@ -38,6 +38,7 @@ export function debugRows(stats, context) {
     { label: "flowing/f", value: formatCount(stats.flowing) },
     { label: "drowned/f", value: formatCount(stats.drowned) },
     { label: "sank/f", value: formatCount(stats.sank) },
+    { label: "gold mined", value: formatCount(stats.gold) },
     { label: "rest frames", value: `${context.restThreshold}` },
     { label: "substeps", value: `${context.substeps}` },
     { label: "view", value: `${Math.round(context.camera.x)}, ${Math.round(context.camera.y)}` },

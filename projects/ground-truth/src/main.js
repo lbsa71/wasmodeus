@@ -14,6 +14,7 @@ import { FrameRateMeter, debugRows } from "./ui/debug-panel.js";
 const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector("#world"));
 const statusLine = /** @type {HTMLParagraphElement} */ (document.querySelector("#status"));
 const debugList = /** @type {HTMLDListElement} */ (document.querySelector("#debug-rows"));
+const goldValue = /** @type {HTMLSpanElement} */ (document.querySelector("#gold-value"));
 const capacityInput = /** @type {HTMLInputElement} */ (document.querySelector("#capacity"));
 const capacityValue = /** @type {HTMLOutputElement} */ (document.querySelector("#capacity-value"));
 const restInput = /** @type {HTMLInputElement} */ (document.querySelector("#rest"));
@@ -192,6 +193,7 @@ try {
   });
 
   const renderDebug = (/** @type {number} */ fps) => {
+    goldValue.textContent = engine.stats.gold.toLocaleString();
     const rows = debugRows(engine.stats, {
       fps,
       frame: engine.frame,

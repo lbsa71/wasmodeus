@@ -11,7 +11,7 @@ import {
   inBounds,
   isBlocked,
 } from "../src/core/geometry.js";
-import { packCell } from "../src/core/field-format.js";
+import { VOID_CELL, packCell } from "../src/core/field-format.js";
 
 const WIDTH = 8;
 const HEIGHT = 4;
@@ -51,4 +51,12 @@ test("an occupied cell blocks and an empty one does not", () => {
 test("a pixel above the world reports the sky sentinel, not a wrapped cell", () => {
   assert.equal(cellOfPosition(2.5, 1.5, WIDTH, HEIGHT), cellIndex(2, 1, WIDTH));
   assert.equal(cellOfPosition(2.5, HEIGHT + 3.5, WIDTH, HEIGHT), SKY_CELL);
+});
+
+test("the placeholder does not block: a tunnel is somewhere a pixel can fall", () => {
+  const field = new Uint32Array(WIDTH * HEIGHT);
+  field[cellIndex(3, 1, WIDTH)] = VOID_CELL;
+  field[cellIndex(4, 1, WIDTH)] = packCell(9, 9, 9);
+  assert.equal(isBlocked(field, 3, 1, WIDTH, HEIGHT), false);
+  assert.equal(isBlocked(field, 4, 1, WIDTH, HEIGHT), true);
 });

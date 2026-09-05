@@ -39,6 +39,36 @@ export function isWater(word) {
 }
 /** Needs no neighbours at all: bedrock, and nothing else moves it but a blast. */
 export const IMMOVABLE = 0;
+
+/** Bit 29: the black placeholder. See {@link VOID_CELL}. */
+export const VOID_BIT = 0x20000000;
+/**
+ * The placeholder that underground emptiness is made of.
+ *
+ * A tunnel is not the absence of pixels. It is a cell that is *present* — it
+ * counts as a neighbour, so a cave roof rests on it and a tunnel a lemming digs
+ * keeps its shape — but it stops nothing: a pixel falls straight through it,
+ * water runs along it, and whatever comes to rest in it replaces it. It is
+ * black, has no colour and no bond, and is never carried anywhere; only the
+ * sky above the skyline is truly empty. Two properties, then, that every other
+ * material has both of and this has one of: it bears load, and it does not
+ * block. Water is its mirror image — it blocks, and bears nothing.
+ */
+export const VOID_CELL = (OCCUPIED_BIT | VOID_BIT) >>> 0;
+
+/** @param {number} word @returns {boolean} */
+export function isVoid(word) {
+  return ((word >>> 0) & VOID_BIT) !== 0;
+}
+
+/**
+ * Whether a cell stops a moving pixel: anything present except the placeholder.
+ *
+ * @param {number} word @returns {boolean}
+ */
+export function blocks(word) {
+  return isOccupied(word) && !isVoid(word);
+}
 /** What a pixel carries with it while airborne: its colour and its bond. */
 export const MATERIAL_MASK = 0x1effffff;
 
