@@ -192,22 +192,7 @@ export function sprinkleGold(field, { width, height, seed }, profile, options = 
     new Uint32Array(new ArrayBuffer(field.length * 4))
   );
   gilded.set(field);
-  const nuggets = options.nuggets ?? Math.max(FEWEST_NUGGETS, Math.round((width * height) / CELLS_PER_NUGGET));
-  const [smallest, largest] = options.radius ?? [Math.max(2, Math.round(height * 0.0018)), Math.max(3, Math.round(height * 0.0048))];
-  const bedrockTop = Math.round(height * BEDROCK_LEVEL);
-  for (let k = 0; k < nuggets; k += 1) {
-    const roll = (/** @type {number} */ salt) => random01((k * 2654435761 + salt * 40503) ^ seed);
-    const cx = Math.floor(roll(1) * width);
-    // Anywhere in the rock between the bedrock and the soil, but biased
-    // towards the top: most nuggets are a short dig from the surface, so a
-    // lemming left to itself will strike one now and then, while the deep ones
-    // take leading a crew all the way down.
-    const ceiling = Math.floor(profile[cx]) - Math.round(height * 0.03);
-    const floor = bedrockTop + Math.round(height * 0.02);
-    if (ceiling <= floor) continue;
-    const shallowness = 1 - roll(2) * roll(2);
-    const cy = floor + Math.floor(shallowness * (ceiling - floor));
-    const radius = smallest + Math.floor(roll(3) * (largest - smallest + 1));
+  for (const { x: cx, y: cy, radius } of goldNuggets({ width, height, seed }, profile, options)) {
     for (let dy = -radius; dy <= radius; dy += 1) {
       for (let dx = -radius; dx <= radius; dx += 1) {
         if (dx * dx + dy * dy > radius * radius) continue;
@@ -223,6 +208,39 @@ export function sprinkleGold(field, { width, height, seed }, profile, options = 
     }
   }
   return gilded;
+}
+
+/**
+ * Where the gold is: nugget centres and radii, a pure function of the seed.
+ * This is what the scent is baked from, so it is exported on its own and the
+ * worker sends it back beside the field.
+ *
+ * @param {{ width: number, height: number, seed: number }} world
+ * @param {Float32Array} profile the skyline
+ * @param {{ nuggets?: number, radius?: [number, number] }} [options]
+ * @returns {{ x: number, y: number, radius: number }[]}
+ */
+export function goldNuggets({ width, height, seed }, profile, options = {}) {
+  const count = options.nuggets ?? Math.max(FEWEST_NUGGETS, Math.round((width * height) / CELLS_PER_NUGGET));
+  const [smallest, largest] = options.radius ?? [Math.max(2, Math.round(height * 0.0018)), Math.max(3, Math.round(height * 0.0048))];
+  const bedrockTop = Math.round(height * BEDROCK_LEVEL);
+  const nuggets = [];
+  for (let k = 0; k < count; k += 1) {
+    const roll = (/** @type {number} */ salt) => random01((k * 2654435761 + salt * 40503) ^ seed);
+    const x = Math.floor(roll(1) * width);
+    // Anywhere in the rock between the bedrock and the soil, but biased
+    // towards the top: most nuggets are a short dig from the surface, so a
+    // lemming left to itself will strike one now and then, while the deep ones
+    // take leading a crew all the way down.
+    const ceiling = Math.floor(profile[x]) - Math.round(height * 0.03);
+    const floor = bedrockTop + Math.round(height * 0.02);
+    if (ceiling <= floor) continue;
+    const shallowness = 1 - roll(2) * roll(2);
+    const y = floor + Math.floor(shallowness * (ceiling - floor));
+    const radius = smallest + Math.floor(roll(3) * (largest - smallest + 1));
+    nuggets.push({ x, y, radius });
+  }
+  return nuggets;
 }
 
 /**

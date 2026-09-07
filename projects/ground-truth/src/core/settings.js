@@ -24,7 +24,8 @@ import { RUBBLE_BOND } from "./palette.js";
  *   brushRadius: number,
  *   blastStrength: number,
  *   smudgeStrength: number,
- *   agents: { count: number, speed: number, bombChance: number, blastRadius: number },
+ *   agents: { count: number, speed: number },
+ *   evolution: { generationFrames: number, eliteFraction: number, mutationRate: number, mutationStrength: number },
  *   waterSpread: number
  * }} Settings
  */
@@ -67,9 +68,12 @@ export function defaultSettings() {
     // is far gentler and needs a fraction of the speed.
     blastStrength: 700,
     smudgeStrength: 240,
-    // Lemmings: how many walk the world, how fast, how readily one sits down
-    // and lights a bomb, and how big a hole that leaves.
-    agents: { count: 600, speed: 26, bombChance: 0.12, blastRadius: 20 },
+    // Lemmings: how many walk the world, and how fast.
+    agents: { count: 600, speed: 26 },
+    // How brains breed. A generation is twenty seconds; the top tenth keep
+    // their weights and everyone else is a mutated cross of two of them. See
+    // `src/core/brain.js`.
+    evolution: { generationFrames: 1200, eliteFraction: 0.1, mutationRate: 0.1, mutationStrength: 0.5 },
     // How briskly water creeps sideways. Water is released every frame it has
     // anywhere to go, so this only has to be enough to carry a drop into the
     // next cell; a real shove would make it arc away like grit.

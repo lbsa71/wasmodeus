@@ -10,11 +10,15 @@ import {
 import { MAX_REST_THRESHOLD, MIN_REST_THRESHOLD } from "./core/rest.js";
 import { AGENT_CAPACITY } from "./core/layout.js";
 import { FrameRateMeter, debugRows } from "./ui/debug-panel.js";
+import { packPopulation, unpackPopulation } from "./core/population.js";
+import { PopulationStore } from "./storage/population-store.js";
 
 const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector("#world"));
+const store = new PopulationStore();
 const statusLine = /** @type {HTMLParagraphElement} */ (document.querySelector("#status"));
 const debugList = /** @type {HTMLDListElement} */ (document.querySelector("#debug-rows"));
 const goldValue = /** @type {HTMLSpanElement} */ (document.querySelector("#gold-value"));
+const generationValue = /** @type {HTMLSpanElement} */ (document.querySelector("#generation-value"));
 const capacityInput = /** @type {HTMLInputElement} */ (document.querySelector("#capacity"));
 const capacityValue = /** @type {HTMLOutputElement} */ (document.querySelector("#capacity-value"));
 const restInput = /** @type {HTMLInputElement} */ (document.querySelector("#rest"));
@@ -30,6 +34,7 @@ const lemmingsValue = /** @type {HTMLOutputElement} */ (document.querySelector("
 const pauseButton = /** @type {HTMLButtonElement} */ (document.querySelector("#pause"));
 const resetButton = /** @type {HTMLButtonElement} */ (document.querySelector("#reset"));
 const reseedButton = /** @type {HTMLButtonElement} */ (document.querySelector("#reseed"));
+const forgetButton = /** @type {HTMLButtonElement} */ (document.querySelector("#forget"));
 
 const resizeCanvas = () => {
   const ratio = Math.min(window.devicePixelRatio, 2);
@@ -50,14 +55,14 @@ const devicePoint = (/** @type {PointerEvent|WheelEvent} */ event) => {
  * @param {Worker} worker
  * @param {{ width: number, height: number }} world
  * @param {number} seed
- * @returns {Promise<import("./core/field-format.js").Field>}
+ * @returns {Promise<{ field: import("./core/field-format.js").Field, nuggets: { x: number, y: number }[] }>}
  */
 function carveWorld(worker, world, seed) {
   return new Promise((resolve, reject) => {
     worker.onmessage = (event) => {
       if (!event.data.ok) { reject(new Error(event.data.message)); return; }
       statusLine.textContent = `${world.width} x ${world.height} world carved in ${Math.round(event.data.milliseconds)} ms`;
-      resolve(new Uint32Array(event.data.buffer));
+      resolve({ field: new Uint32Array(event.data.buffer), nuggets: event.data.nuggets });
     };
     worker.onerror = (event) => reject(new Error(event.message));
     worker.postMessage({ width: world.width, height: world.height, seed });
@@ -132,12 +137,18 @@ try {
     pauseButton.setAttribute("aria-pressed", `${engine.paused}`);
   });
   resetButton.addEventListener("click", () => engine.reset());
+  forgetButton.addEventListener("click", () => {
+    engine.forgetPopulation();
+    store.clear().catch(() => {});
+    statusLine.textContent = "Brains forgotten: evolution starts over from generation 0";
+  });
   reseedButton.addEventListener("click", async () => {
     reseedButton.disabled = true;
     engine.settings.seed += 1;
     statusLine.textContent = "Carving a new world…";
     try {
-      engine.loadWorld(await carveWorld(worker, engine.settings.world, engine.settings.seed));
+      const carved = await carveWorld(worker, engine.settings.world, engine.settings.seed);
+      engine.loadWorld(carved.field, carved.nuggets);
     } catch (error) {
       statusLine.textContent = error instanceof Error ? error.message : `${error}`;
     }
@@ -194,12 +205,14 @@ try {
 
   const renderDebug = (/** @type {number} */ fps) => {
     goldValue.textContent = engine.stats.gold.toLocaleString();
+    generationValue.textContent = `gen ${engine.evolution.generation} · best ${Math.round(engine.evolution.best).toLocaleString()}`;
     const rows = debugRows(engine.stats, {
       fps,
       frame: engine.frame,
       restThreshold: engine.settings.restThreshold,
       substeps: engine.settings.substeps,
       camera: engine.camera,
+      evolution: engine.evolution,
     });
     debugList.replaceChildren(...rows.flatMap((row) => {
       const term = document.createElement("dt");
@@ -219,7 +232,29 @@ try {
   requestAnimationFrame(loop);
 
   statusLine.textContent = "Carving caves…";
-  engine.loadWorld(await carveWorld(worker, engine.settings.world, engine.settings.seed));
+  const carved = await carveWorld(worker, engine.settings.world, engine.settings.seed);
+  engine.loadWorld(carved.field, carved.nuggets);
+
+  // Evolution is slow and a reload is not: every generation is saved as it is
+  // bred, and the last one saved is picked up here. A record that cannot be
+  // trusted is dropped rather than loaded.
+  engine.onGeneration = (population) => {
+    store.save(packPopulation(population)).catch((error) => {
+      statusLine.textContent = `Could not save the population: ${error instanceof Error ? error.message : error}`;
+    });
+  };
+  try {
+    const record = await store.load();
+    if (record) {
+      const saved = unpackPopulation(record);
+      engine.adoptPopulation(saved);
+      const age = Math.round((Date.now() - saved.savedAt) / 60_000);
+      statusLine.textContent = `Picked up generation ${saved.generation} (${saved.count} brains, saved ${age} min ago)`;
+    }
+  } catch (error) {
+    statusLine.textContent = `Saved population dropped: ${error instanceof Error ? error.message : error}`;
+    store.clear().catch(() => {});
+  }
 } catch (error) {
   statusLine.textContent = error instanceof Error ? error.message : `${error}`;
   statusLine.classList.add("error");

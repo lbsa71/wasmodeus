@@ -6,8 +6,16 @@ import {
   F_CAMERA_SCALE,
   F_CAMERA_X,
 
+  AGENT_BODY_WORDS,
+  AGENT_CAPACITY,
+  AGENT_BRAIN,
+  AGENT_STRIDE_BYTES,
+  ELITE_CAPACITY,
   F_DRAG_X,
   F_DT,
+  F_SCENT_CELL,
+  U_ELITE_COUNT,
+  U_SCENT_COLS,
   F_GRAVITY,
   F_SLUMP_CHANCE,
   F_VIEWPORT_X,
@@ -24,6 +32,7 @@ import {
   workgroupCount,
   writeParams,
 } from "../src/core/layout.js";
+import { BRAIN_FLOATS } from "../src/core/brain.js";
 
 /** @type {import("../src/core/layout.js").SimulationParams} */
 const PARAMS = {
@@ -44,7 +53,9 @@ const PARAMS = {
   camera: { x: 2048, y: 1024, scale: 0.5 },
   rubbleBond: 5,
   drag: { x: 0.6, y: -0.8 },
-  agents: { count: 600, speed: 26, bombChance: 0.25, blastRadius: 22 },
+  agents: { count: 600, speed: 26 },
+  eliteCount: 60,
+  scent: { cellSize: 64, cols: 96 },
   frameSeconds: 1 / 60,
   waterSpread: 46,
 };
@@ -92,6 +103,16 @@ test("params are written into the words the shader reads them from", () => {
   // Which way the pointer brush drags material; zero means a radial blast.
   assert.ok(Math.abs(f[F_DRAG_X] - 0.6) < 1e-6);
   assert.ok(Math.abs(f[F_DRAG_X + 1] + 0.8) < 1e-6);
+  assert.equal(u[U_ELITE_COUNT], 60);
+  assert.equal(f[F_SCENT_CELL], 64);
+  assert.equal(u[U_SCENT_COLS], 96);
+});
+
+test("an agent record is its body followed by its brain", () => {
+  assert.equal(AGENT_BRAIN, AGENT_BODY_WORDS);
+  assert.equal(AGENT_STRIDE_BYTES, (AGENT_BODY_WORDS + BRAIN_FLOATS) * 4);
+  assert.equal(AGENT_STRIDE_BYTES % 4, 0);
+  assert.ok(ELITE_CAPACITY >= AGENT_CAPACITY / 4, "a quarter of the population may be elite");
 });
 
 test("the drag lands on an 8-byte boundary as a vec2f requires", () => {

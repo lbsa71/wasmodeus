@@ -14,6 +14,14 @@ import {
 import { SKY_CELL } from "../src/core/geometry.js";
 import { COUNTER_WORDS, PER_FRAME_COUNTERS } from "../src/core/counters.js";
 import { GOLD_MAX_BLUE, GOLD_MIN_GREEN, GOLD_MIN_RED } from "../src/core/palette.js";
+import {
+  ACTION_DIG, ACTION_TURN, ACTION_WALK, APPROACH_REWARD, BRAIN_B1, BRAIN_B2, BRAIN_FLOATS, BRAIN_W1, BRAIN_W2,
+  DEATH_PENALTY, DECISION_HOLD, GOLD_REWARD, HIDDEN, INPUTS, INPUT_ABOVE_AHEAD, INPUT_AHEAD, INPUT_BIAS,
+  INPUT_DIGGING, INPUT_DROP_AHEAD, INPUT_FACING, INPUT_GOLD_AHEAD, INPUT_HARDNESS, INPUT_SCENT_NEAR,
+  INPUT_SCENT_X, INPUT_SCENT_Y, INPUT_WATER, OUTPUTS, SCENT_RANGE, CLOSEST_UNSET,
+} from "../src/core/brain.js";
+import { MAX_SCENT_CELLS } from "../src/core/scent.js";
+import { ELITE_CAPACITY } from "../src/core/layout.js";
 import { SUPPORT_FALL, SUPPORT_FIRM, SUPPORT_SLUMP } from "../src/core/sand.js";
 import {
   COMPUTE_PASSES,
@@ -22,6 +30,10 @@ import {
   F_CAMERA_X,
 
   F_DRAG_X,
+  F_SCENT_CELL,
+  U_ELITE_COUNT,
+  U_SCENT_COLS,
+  AGENT_STRIDE_BYTES,
   F_DAMPING,
   F_DISLODGE_SPEED,
   F_DT,
@@ -136,6 +148,9 @@ test("the Params struct is laid out where writeParams writes", () => {
     ["camera_scale", F_CAMERA_SCALE],
     ["rubble_bond", U_RUBBLE_BOND],
     ["brush_drag", F_DRAG_X],
+    ["elite_count", U_ELITE_COUNT],
+    ["scent_cell", F_SCENT_CELL],
+    ["scent_cols", U_SCENT_COLS],
   ];
   for (const [member, word] of expected) {
     assert.equal(offsets[member], word * 4, `Params.${member}`);
@@ -191,12 +206,12 @@ test("every dispatched pass exists in the shader with the expected workgroup siz
 
 test("only settle pushes to the free ring; everything else only pops", () => {
   // The ring is safe because pushes and pops never mix within a dispatch, and
-  // every popper spends the budget `prepare` snapshotted. Lemmings pop too —
-  // digging and coming apart both take slots — so they must be pop-only as well.
+  // every popper spends the budget `prepare` snapshotted. A lemming coming
+  // apart pops too, so that must be pop-only as well.
   const bodies = Object.fromEntries(
     [...simulation.matchAll(/\nfn\s+(\w+)\([\s\S]*?\n\}/g)].map((match) => [match[1], match[0]]),
   );
-  for (const pass of ["release_cell", "shatter"]) {
+  for (const pass of ["shatter"]) {
     assert.doesNotMatch(bodies[pass], /counters\.tail/, `${pass} must not push to the ring`);
     assert.match(bodies[pass], /atomicSub\(&counters\.pop_budget, 1\)/,
       `${pass} must claim from the budget before popping`);
@@ -556,9 +571,9 @@ test("a lemming reads what hit it, not its own sprite", () => {
 });
 
 test("lemmings draw on the same pool budget the world does", () => {
-  // Digging and detonating both pop free slots. `step_agents` runs before
-  // `emit`, so they compete for the budget `prepare` snapshotted rather than
-  // spending on top of it and overrunning the ring.
+  // A lemming coming apart pops free slots. `step_agents` runs before `emit`,
+  // so it competes for the budget `prepare` snapshotted rather than spending
+  // on top of it and overrunning the ring.
   const passes = COMPUTE_PASSES;
   assert.ok(passes.indexOf("step_agents") > passes.indexOf("settle"));
   assert.ok(passes.indexOf("step_agents") < passes.indexOf("emit"));
@@ -566,18 +581,17 @@ test("lemmings draw on the same pool budget the world does", () => {
   assert.ok(passes.indexOf("draw_agents") > passes.indexOf("emit"));
   assert.ok(passes.indexOf("draw_agents") > passes.indexOf("splat"));
 
-  const release = simulation.match(/\nfn\s+release_cell\([\s\S]*?\n\}/)?.[0] ?? "";
-  assert.match(release, /atomicSub\(&counters\.pop_budget, 1\)/, "digging must claim a slot");
+  assert.match(body("shatter"), /atomicSub\(&counters\.pop_budget, 1\)/, "coming apart must claim slots");
   const shatter = simulation.match(/\nfn\s+shatter\([\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(shatter, /atomicSub\(&counters\.pop_budget, 1\)/, "and so must coming apart");
 });
 
 test("a lost lemming is replaced rather than simply gone", () => {
-  // Bombs kill the bomber and the debris takes its neighbours, so without a
-  // respawn the population only falls and the world goes quiet.
-  const step = simulation.match(/\nfn\s+step_agents\([\s\S]*?\n\}/)?.[0] ?? "";
-  assert.match(step, /AGENT_RESPAWN/, "death must leave a countdown");
-  assert.match(step, /waiting > 1u/, "which is ticked down");
+  // Floods and falling rock take lemmings, so without a respawn the population
+  // only falls and the world goes quiet.
+  assert.match(body("die"), /AGENT_RESPAWN/, "death must leave a countdown");
+  assert.match(body("step_agents"), /waiting > 1u/, "which is ticked down");
+  assert.match(body("step_agents"), /respawn\(i\)/);
 });
 
 // --- The placeholder ---------------------------------------------------------
@@ -641,15 +655,14 @@ test("a lemming digs by turning cells into the placeholder, not by releasing the
   assert.match(dig, /is_gold\(value\)[\s\S]*?counters\.gold/, "gold dug through is gold mined");
 
   const step = body("step_agents");
-  const digging = step.slice(step.indexOf("mode == MODE_DIG"), step.indexOf("} else {", step.indexOf("mode == MODE_DIG")));
+  const digging = step.slice(step.indexOf("if (mode == MODE_DIG) {"), step.indexOf("} else {", step.indexOf("if (mode == MODE_DIG) {")));
   assert.match(digging, /dig_cell\(/);
-  assert.doesNotMatch(digging, /release_cell\(/, "digging must not go through the pool");
-  assert.match(step, /release_cell\(/, "the bomb still does");
+  assert.doesNotMatch(simulation, /release_cell\(/, "nothing a lemming does goes through the pool but coming apart");
 });
 
 test("a tunnel is one cell bigger than the lemming: its height plus headroom, two columns ahead", () => {
   const step = body("step_agents");
-  const digging = step.slice(step.indexOf("mode == MODE_DIG"), step.indexOf("} else {", step.indexOf("mode == MODE_DIG")));
+  const digging = step.slice(step.indexOf("if (mode == MODE_DIG) {"), step.indexOf("} else {", step.indexOf("if (mode == MODE_DIG) {")));
   assert.match(digging, /for \(var dy = 0; dy <= AGENT_HEIGHT; dy \+= 1\)/, "the body's rows and one above");
   assert.match(digging, /for \(var step = 1; step <= 2; step \+= 1\)/, "the column ahead and the one beyond");
   assert.match(digging, /x \+ facing \* step, y \+ dy/);
@@ -661,4 +674,106 @@ test("the shader recognises gold by the same colour the palette does", () => {
   assert.match(gold, new RegExp(`r >= ${GOLD_MIN_RED}u`));
   assert.match(gold, new RegExp(`g >= ${GOLD_MIN_GREEN}u`));
   assert.match(gold, new RegExp(`b <= ${GOLD_MAX_BLUE}u`));
+});
+
+// --- Brains ------------------------------------------------------------------
+
+/** @param {string} name @param {string} type @returns {number} */
+function shaderConst(name, type) {
+  const declared = simulation.match(new RegExp(`const\\s+${name}\\s*:\\s*${type}\\s*=\\s*(-?[0-9.e+-]+)u?`))?.[1];
+  assert.ok(declared !== undefined, `${name} is not declared in the shader`);
+  return Number(declared);
+}
+
+test("the shader's brain has the topology and weight layout brain.js breeds for", () => {
+  for (const [name, value] of [
+    ["INPUTS", INPUTS], ["HIDDEN", HIDDEN], ["OUTPUTS", OUTPUTS],
+    ["BRAIN_W1", BRAIN_W1], ["BRAIN_B1", BRAIN_B1], ["BRAIN_W2", BRAIN_W2], ["BRAIN_B2", BRAIN_B2],
+    ["BRAIN_FLOATS", BRAIN_FLOATS],
+    ["ACTION_WALK", ACTION_WALK], ["ACTION_DIG", ACTION_DIG], ["ACTION_TURN", ACTION_TURN],
+    ["DECISION_HOLD", DECISION_HOLD],
+  ]) {
+    assert.equal(shaderConst(name, "u32"), value, `${name} differs between shader and JavaScript`);
+  }
+  for (const [name, value] of [
+    ["GOLD_REWARD", GOLD_REWARD], ["APPROACH_REWARD", APPROACH_REWARD],
+    ["DEATH_PENALTY", DEATH_PENALTY], ["SCENT_RANGE", SCENT_RANGE],
+  ]) {
+    assert.equal(shaderConst(name, "f32"), value, `${name} differs between shader and JavaScript`);
+  }
+  assert.match(simulation, /brain: array<f32, 131>,/, "the brain lives inline in the agent record");
+  assert.equal(BRAIN_FLOATS, 131);
+});
+
+test("the agent record is laid out where the engine writes it", () => {
+  const struct = simulation.match(/struct Agent \{([\s\S]*?)\};/)?.[1] ?? "";
+  const fields = [...struct.matchAll(/^\s*(\w+):\s*([^\n]+?),\s*$/gm)].map((m) => [m[1], m[2].trim()]);
+  assert.deepEqual(fields, [
+    ["pos_x", "f32"], ["pos_y", "f32"], ["vel_x", "f32"], ["vel_y", "f32"],
+    ["state", "u32"], ["score", "f32"], ["closest", "f32"], ["brain", "array<f32, 131>"],
+  ]);
+  assert.equal(AGENT_STRIDE_BYTES, 7 * 4 + 131 * 4);
+});
+
+test("every sense the brain was bred on is filled in, at the slot it expects", () => {
+  const step = body("step_agents");
+  const senses = {
+    INPUT_BIAS, INPUT_DROP_AHEAD, INPUT_AHEAD, INPUT_ABOVE_AHEAD, INPUT_HARDNESS, INPUT_WATER,
+    INPUT_FACING, INPUT_SCENT_X, INPUT_SCENT_Y, INPUT_SCENT_NEAR, INPUT_GOLD_AHEAD, INPUT_DIGGING,
+  };
+  assert.equal(Object.keys(senses).length, INPUTS, "one constant per input");
+  for (const [name, slot] of Object.entries(senses)) {
+    assert.equal(shaderConst(name, "u32"), slot, `${name} differs between shader and JavaScript`);
+    assert.ok(step.includes(`inputs[${name}] =`), `${name} is never filled in`);
+  }
+  assert.match(step, /let action = think\(i, &inputs\);/);
+});
+
+test("think is the same arithmetic as forward: tanh hidden units, argmax output", () => {
+  const think = body("think");
+  assert.ok(think, "think is missing from the shader");
+  assert.match(think, /for \(var h = 0u; h < HIDDEN; h \+= 1u\)/);
+  assert.match(think, /for \(var k = 0u; k < INPUTS; k \+= 1u\)/);
+  assert.match(think, /for \(var o = 0u; o < OUTPUTS; o \+= 1u\)/);
+  assert.match(think, /agents\[i\]\.brain\[BRAIN_W1 \+ h \* INPUTS \+ k\]/, "W1 is hidden-major");
+  assert.match(think, /agents\[i\]\.brain\[BRAIN_W2 \+ o \* HIDDEN \+ h\]/, "W2 is output-major");
+  assert.match(think, /tanh\(sum\)/);
+  assert.match(think, /if \(sum > best_score\)/, "strictly greater, so a tie goes to the first");
+});
+
+test("only successful nets are respawned: a dead slot is reborn as a clone of an elite", () => {
+  const respawn = body("respawn");
+  assert.ok(respawn, "respawn is missing from the shader");
+  assert.match(respawn, /elite_slot\(born % params\.elite_count\)/);
+  assert.match(respawn, /agents\[i\]\.brain\[k\] = agents\[e\]\.brain\[k\]/, "the brain is copied, not re-rolled");
+  assert.match(respawn, /agents\[i\]\.score = 0\.0/, "and starts scoring afresh");
+  assert.match(respawn, /agents\[i\]\.closest = CLOSEST_UNSET/, "and its nearest-ever is not yet measured");
+});
+
+test("what a lemming is scored on", () => {
+  const step = body("step_agents");
+  assert.match(step, /score \+= \(closest - dist\) \* APPROACH_REWARD/, "getting nearer to gold than ever");
+  // The measure starts where it first stands. Paid from the sky, every lemming
+  // earned the same seven hundred points for falling: nothing to select on.
+  assert.equal(shaderConst("CLOSEST_UNSET", "f32"), CLOSEST_UNSET);
+  assert.match(step, /if \(closest < 0\.0\) \{\s*closest = min\(dist, SCENT_RANGE\);\s*\} else if/,
+    "the first standing frame only measures");
+  assert.match(step, /if \(found == DUG_GOLD\) \{ score \+= GOLD_REWARD; \}/, "digging through gold");
+  assert.match(body("die"), /score - DEATH_PENALTY/, "and dying costs");
+  const drown = step.indexOf("counters.drowned");
+  assert.ok(step.indexOf("die(i, score)", drown) > drown, "drowning is a death");
+  const struck = step.indexOf("shatter(i, x, y, colour)");
+  assert.ok(step.indexOf("die(i, score)", struck) > struck, "and so is being smashed");
+});
+
+test("the scent and the elite list are uniforms, which is what keeps the storage count legal", () => {
+  assert.match(simulation, /@binding\(9\) var<uniform> scent: array<vec4f, 4096>;/);
+  assert.match(simulation, /@binding\(10\) var<uniform> elites: array<vec4u, 256>;/);
+  assert.equal(4096 * 2, MAX_SCENT_CELLS);
+  assert.equal(256 * 4, ELITE_CAPACITY);
+  assert.equal(shaderConst("SCENT_CELLS", "u32"), MAX_SCENT_CELLS);
+});
+
+test("the bomb is gone", () => {
+  assert.doesNotMatch(simulation, /MODE_FUSE|agent_bomb|agent_blast|release_cell/);
 });

@@ -1,10 +1,11 @@
 /**
  * Lemmings.
  *
- * Small creatures that walk the world, tunnel through it, and occasionally sit
- * down and light a bomb. They are not part of the field — sand does not rest on
- * one — but they read it for every decision, so a tunnel one digs is a real
- * tunnel and a floor blown out from under one really drops it.
+ * Small creatures that walk the world and tunnel through it, each steered by
+ * its own evolved brain — see `src/core/brain.js`. They are not part of the
+ * field — sand does not rest on one — but they read it for every decision, so
+ * a tunnel one digs is a real tunnel and a floor blown out from under one
+ * really drops it.
  *
  * "Sprite" is the right word for how they come apart. A lemming is drawn as a
  * little block of pixels, and when something hits it hard enough the block is
@@ -20,8 +21,6 @@
 export const MODE_WALK = 0;
 /** Chewing through the world, one cell at a time. */
 export const MODE_DIG = 1;
-/** Sitting on a lit bomb, counting down. */
-export const MODE_FUSE = 2;
 
 /** Bits of the packed agent state word. */
 export const AGENT_TIMER_MASK = 0x000000ff;
@@ -95,15 +94,3 @@ export function tick(timer) {
   return { timer: timer - 1, fired: false };
 }
 
-/**
- * How long a lemming keeps doing one thing before reconsidering. Deterministic
- * in the seed so a run can be replayed.
- *
- * @param {number} seed
- * @param {number} shortest @param {number} longest
- * @returns {number}
- */
-export function timerFor(seed, shortest, longest) {
-  const span = Math.max(0, longest - shortest);
-  return Math.min(MAX_AGENT_TIMER, shortest + (span > 0 ? seed % (span + 1) : 0));
-}

@@ -6,7 +6,7 @@
  * here the page stays responsive and the finished field comes back as a
  * transfer, so the eighty-odd megabytes are moved rather than copied.
  */
-import { createCaveWorld } from "../core/world-gen.js";
+import { createCaveWorld, goldNuggets, surfaceProfile } from "../core/world-gen.js";
 
 /**
  * The slice of `DedicatedWorkerGlobalScope` used here. This project type-checks
@@ -26,8 +26,11 @@ scope.addEventListener("message", (event) => {
   try {
     const started = performance.now();
     const field = createCaveWorld({ width, height, seed });
+    // Where the gold is, for the scent the lemmings follow. A pure function of
+    // the seed, and cheap, so it is simply computed again here.
+    const nuggets = goldNuggets({ width, height, seed }, surfaceProfile({ width, height, seed }));
     scope.postMessage(
-      { ok: true, buffer: field.buffer, milliseconds: performance.now() - started },
+      { ok: true, buffer: field.buffer, nuggets, milliseconds: performance.now() - started },
       [field.buffer],
     );
   } catch (error) {

@@ -29,10 +29,11 @@ struct Params {
   brush_drag: vec2f,
   agent_count: u32,
   agent_speed: f32,
-  agent_bomb_chance: f32,
-  agent_blast: f32,
+  elite_count: u32,
+  scent_cell: f32,
   frame_seconds: f32,
   water_spread: f32,
+  scent_cols: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;

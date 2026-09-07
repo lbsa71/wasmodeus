@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createCaveWorld, settleBonds, sprinkleGold, surfaceProfile } from "../src/core/world-gen.js";
+import { createCaveWorld, goldNuggets, settleBonds, sprinkleGold, surfaceProfile } from "../src/core/world-gen.js";
 import { cellIndex } from "../src/core/geometry.js";
 import { VOID_CELL, WATER_BOND, cellBond, isOccupied, isVoid, packCell, unpackCell } from "../src/core/field-format.js";
 import { neighbourSupport } from "../src/core/sand.js";
@@ -273,4 +273,23 @@ test("most nuggets lie shallow, so a lemming can strike one without being led", 
   const median = depths[Math.floor(depths.length / 2)];
   assert.ok(median > size.height * 0.6, `median nugget height ${median} of ${size.height} is not shallow`);
   assert.ok(depths[0] < size.height * 0.25, "but some gold must still be deep");
+});
+
+test("the nugget list is what the gold was painted from", () => {
+  // The scent is baked from this list, so it has to be the same list the
+  // world was gilded with: every centre in it is gold in a world of stone.
+  const size = { width: 96, height: 96 };
+  const field = /** @type {import("../src/core/field-format.js").Field} */ (
+    new Uint32Array(new ArrayBuffer(size.width * size.height * 4))
+  );
+  for (let i = 0; i < field.length; i += 1) field[i] = packCell(78, 80, 92, 2);
+  const profile = new Float32Array(size.width).fill(size.height - 1);
+  const nuggets = goldNuggets({ ...size, seed: 4 }, profile, { nuggets: 12, radius: [1, 2] });
+  const sprinkled = sprinkleGold(field, { ...size, seed: 4 }, profile, { nuggets: 12, radius: [1, 2] });
+  assert.ok(nuggets.length > 0);
+  for (const { x, y } of nuggets) {
+    assert.ok(isGold(sprinkled[cellIndex(x, y, size.width)]), `no gold at the centre ${x},${y}`);
+    assert.ok(y < profile[x], "below the skyline");
+  }
+  assert.deepEqual(goldNuggets({ ...size, seed: 4 }, profile, { nuggets: 12, radius: [1, 2] }), nuggets, "pure in its seed");
 });

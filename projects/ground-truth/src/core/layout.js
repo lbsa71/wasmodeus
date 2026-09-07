@@ -1,3 +1,4 @@
+import { BRAIN_FLOATS } from "./brain.js";
 /**
  * Byte layout of the GPU buffers. These constants are duplicated structurally
  * in `src/gpu/shaders/simulation.wgsl`; `test/wgsl-contract.test.js` fails if
@@ -70,10 +71,13 @@ export const F_DRAG_X = 26;
 export const F_DRAG_Y = 27;
 export const U_AGENT_COUNT = 28;
 export const F_AGENT_SPEED = 29;
-export const F_AGENT_BOMB_CHANCE = 30;
-export const F_AGENT_BLAST = 31;
+/** How many of the `elites` list are valid: who a dead lemming may be cloned from. */
+export const U_ELITE_COUNT = 30;
+/** Size of one scent cell in world cells, and how many across. See `src/core/scent.js`. */
+export const F_SCENT_CELL = 31;
 export const F_FRAME_SECONDS = 32;
 export const F_WATER_SPREAD = 33;
+export const U_SCENT_COLS = 34;
 
 /**
  * @typedef {{
@@ -87,7 +91,9 @@ export const F_WATER_SPREAD = 33;
  *   camera: { x: number, y: number, scale: number },
  *   rubbleBond: number,
  *   drag: { x: number, y: number },
- *   agents: { count: number, speed: number, bombChance: number, blastRadius: number },
+ *   agents: { count: number, speed: number },
+ *   eliteCount: number,
+ *   scent: { cellSize: number, cols: number },
  *   frameSeconds: number,
  *   waterSpread: number
  * }} SimulationParams
@@ -133,10 +139,11 @@ export function writeParams(target, params) {
   f[F_DRAG_Y] = params.drag.y;
   u[U_AGENT_COUNT] = params.agents.count;
   f[F_AGENT_SPEED] = params.agents.speed;
-  f[F_AGENT_BOMB_CHANCE] = params.agents.bombChance;
-  f[F_AGENT_BLAST] = params.agents.blastRadius;
+  u[U_ELITE_COUNT] = params.eliteCount;
+  f[F_SCENT_CELL] = params.scent.cellSize;
   f[F_FRAME_SECONDS] = params.frameSeconds;
   f[F_WATER_SPREAD] = params.waterSpread;
+  u[U_SCENT_COLS] = params.scent.cols;
   return target;
 }
 
@@ -163,8 +170,24 @@ export const WORKGROUP_SIZE = 256;
 export const COMPUTE_PASSES = [
   "prepare", "integrate", "advance", "settle", "step_agents", "emit", "splat", "draw_agents",
 ];
-/** Bytes per lemming: position, velocity and a packed state word. */
-export const AGENT_STRIDE_BYTES = 20;
+/**
+ * A lemming record: its body, its score, and its brain, inline. Keeping the
+ * brain in the same record means the forward pass, the elite clone on respawn
+ * and the once-a-generation readback all touch one buffer and one binding.
+ */
+export const AGENT_BODY_WORDS = 7;
+export const AGENT_POS_X = 0;
+export const AGENT_POS_Y = 1;
+export const AGENT_VEL_X = 2;
+export const AGENT_VEL_Y = 3;
+export const AGENT_STATE = 4;
+export const AGENT_SCORE = 5;
+export const AGENT_CLOSEST = 6;
+export const AGENT_BRAIN = AGENT_BODY_WORDS;
+export const AGENT_STRIDE_BYTES = (AGENT_BODY_WORDS + BRAIN_FLOATS) * 4;
+/** The elite list the shader clones from: `array<vec4u, 256>`, so 1024 slots. */
+export const ELITE_CAPACITY = 1024;
+export const ELITES_BYTES = ELITE_CAPACITY * 4;
 /** Most lemmings the buffer holds. A rounding error next to the field. */
 export const AGENT_CAPACITY = 4096;
 

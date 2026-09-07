@@ -9,7 +9,8 @@ import { formatScale } from "../core/camera.js";
  * @param {import("../core/counters.js").CounterSnapshot} stats
  * @param {{
  *   fps: number, frame: number, restThreshold: number, substeps: number,
- *   camera: import("../core/camera.js").Camera
+ *   camera: import("../core/camera.js").Camera,
+ *   evolution?: { generation: number, best: number, mean: number, frame: number, frames: number }
  * }} context
  * @returns {{ label: string, value: string, warn?: boolean }[]}
  */
@@ -39,6 +40,11 @@ export function debugRows(stats, context) {
     { label: "drowned/f", value: formatCount(stats.drowned) },
     { label: "sank/f", value: formatCount(stats.sank) },
     { label: "gold mined", value: formatCount(stats.gold) },
+    ...(context.evolution ? [
+      { label: "generation", value: `${context.evolution.generation} · ${context.evolution.frame}/${context.evolution.frames}` },
+      { label: "best score", value: formatCount(context.evolution.best) },
+      { label: "mean score", value: formatCount(context.evolution.mean) },
+    ] : []),
     { label: "rest frames", value: `${context.restThreshold}` },
     { label: "substeps", value: `${context.substeps}` },
     { label: "view", value: `${Math.round(context.camera.x)}, ${Math.round(context.camera.y)}` },

@@ -32,6 +32,11 @@ export function createPipelines(device, format) {
       { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
       { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
       { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+      // The scent of gold and this generation's elite: small, read-only, and
+      // uniforms rather than storage so they stay clear of the eight-storage-
+      // buffer limit a device is only guaranteed to have.
+      { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+      { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
     ],
   });
   const compositeLayout = device.createBindGroupLayout({

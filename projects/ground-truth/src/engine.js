@@ -8,11 +8,17 @@
  * and blends back in.
  */
 import { COUNTERS_BYTES, decodeCounters } from "./core/counters.js";
-import { AGENT_CAPACITY, AGENT_STRIDE_BYTES, PARAMS_BYTES, dispatchGrid, maxCapacityFor, writeParams } from "./core/layout.js";
+import {
+  AGENT_BRAIN, AGENT_CAPACITY, AGENT_CLOSEST, AGENT_SCORE, AGENT_STATE, AGENT_STRIDE_BYTES, ELITE_CAPACITY,
+  PARAMS_BYTES, dispatchGrid, maxCapacityFor, writeParams,
+} from "./core/layout.js";
+import { BRAIN_FLOATS, CLOSEST_UNSET, nextGeneration, randomBrain } from "./core/brain.js";
+import { bakeScent } from "./core/scent.js";
+import { resizePopulation } from "./core/population.js";
 import { ringMask } from "./core/capacity.js";
 import { clampRestThreshold } from "./core/rest.js";
 import { clampRestitution } from "./core/collision.js";
-import { MODE_WALK, packAgent, timerFor } from "./core/agents.js";
+import { MODE_WALK, packAgent } from "./core/agents.js";
 import { hashU32 } from "./core/prng.js";
 import { defaultSettings } from "./core/settings.js";
 import { clampCamera, createCamera, panCamera, worldFromScreen, zoomCameraAt } from "./core/camera.js";
@@ -58,6 +64,32 @@ export class GroundTruthEngine {
     this.paramsData = new ArrayBuffer(PARAMS_BYTES);
     /** @type {import("./core/field-format.js").Field|null} */
     this.sourceField = null;
+    /** @type {{ x: number, y: number }[]} where the gold is */
+    this.nuggets = [];
+    this.scent = bakeScent([], settings.world);
+    /** How many of the elite list the shader may clone from. */
+    this.eliteCount = 0;
+    /** The state of evolution: which generation, how far through, how it scored. */
+    this.evolution = { generation: 0, best: 0, mean: 0, frame: 0, frames: settings.evolution.generationFrames };
+    /** A generation readback in flight; frames carry on meanwhile. */
+    this.evolving = false;
+    /**
+     * The population as last bred or loaded: every brain, and who the elite
+     * are. Kept here so a reset, a new world or a change of head-count carries
+     * the brains over rather than starting from noise.
+     *
+     * @type {{ brains: Float32Array, elites: Uint32Array }|null}
+     */
+    this.population = null;
+    /**
+     * Called after every generation with the population just bred, which is
+     * the moment to save it.
+     *
+     * @type {((population: {
+     *   generation: number, count: number, brains: Float32Array, elites: Uint32Array, best: number, mean: number
+     * }) => void)|null}
+     */
+    this.onGeneration = null;
     this.resources = new SimulationResources(device, settings.world);
     this.settings.capacity = Math.min(settings.capacity, maxCapacityFor(device.limits));
     this.stats = decodeCounters(new Uint32Array(COUNTERS_BYTES / 4), this.settings.capacity);
@@ -90,13 +122,17 @@ export class GroundTruthEngine {
    * Adopts a freshly generated world and starts simulating it.
    *
    * @param {import("./core/field-format.js").Field} field
+   * @param {{ x: number, y: number }[]} [nuggets] where the gold is, for the scent
    */
-  loadWorld(field) {
+  loadWorld(field, nuggets = []) {
     const { width, height } = this.settings.world;
     if (field.length !== width * height) {
       throw new Error(`Expected a ${width} x ${height} world, got ${field.length} cells.`);
     }
     this.sourceField = field;
+    this.nuggets = nuggets;
+    this.scent = bakeScent(nuggets, this.settings.world);
+    this.resources.uploadScent(this.scent);
     this.ready = true;
     // Re-clamp: the camera was built before the world existed, and a view
     // pointing outside it renders nothing but void.
@@ -163,23 +199,115 @@ export class GroundTruthEngine {
    * @param {number} [count]
    */
   populate(count = this.settings.agents.count) {
-    const { width, height } = this.settings.world;
     this.settings.agents.count = Math.max(0, Math.min(AGENT_CAPACITY, Math.round(count)));
-    const data = new ArrayBuffer(Math.max(1, this.settings.agents.count) * AGENT_STRIDE_BYTES);
+    const n = this.settings.agents.count;
+    if (this.population && n > 0) {
+      // Brains carry over. More lemmings than brains and the newcomers are
+      // mutated copies of what was learned; fewer and the rest are dropped.
+      const fitted = resizePopulation(this.population.brains, this.population.elites, n, hashU32(n * 31 + this.settings.seed));
+      this.population = fitted;
+      this.evolution = { ...this.evolution, frame: 0, frames: this.settings.evolution.generationFrames };
+      this.#spawn(fitted.brains, fitted.elites);
+      return;
+    }
+    // Generation zero: random brains, and everyone counts as elite, so a
+    // lemming lost before the first selection is cloned from anyone.
+    const brains = new Float32Array(n * BRAIN_FLOATS);
+    for (let i = 0; i < n; i += 1) randomBrain(hashU32(i * 7919 + this.settings.seed), brains, i * BRAIN_FLOATS);
+    const everyone = Uint32Array.from({ length: Math.min(n, ELITE_CAPACITY) }, (_, i) => i);
+    this.population = n > 0 ? { brains, elites: everyone } : null;
+    this.evolution = { generation: 0, best: 0, mean: 0, frame: 0, frames: this.settings.evolution.generationFrames };
+    this.#spawn(brains, everyone);
+  }
+
+  /**
+   * Takes up a population saved on an earlier visit, fitted to however many
+   * lemmings there are now, and carries on from its generation.
+   *
+   * @param {{ generation: number, brains: Float32Array, elites: Uint32Array, best: number, mean: number }} saved
+   */
+  adoptPopulation(saved) {
+    this.population = { brains: saved.brains, elites: saved.elites };
+    this.evolution = {
+      generation: saved.generation, best: saved.best, mean: saved.mean,
+      frame: 0, frames: this.settings.evolution.generationFrames,
+    };
+    this.populate(this.settings.agents.count);
+  }
+
+  /** Starts evolution over from random brains. */
+  forgetPopulation() {
+    this.population = null;
+    this.populate(this.settings.agents.count);
+  }
+
+  /**
+   * Writes a whole population: fresh bodies scattered along the sky, each with
+   * the brain it was given, and the list of who may be cloned from.
+   *
+   * @param {Float32Array} brains `count * BRAIN_FLOATS`
+   * @param {Uint32Array} elites slots
+   */
+  #spawn(brains, elites) {
+    const { width, height } = this.settings.world;
+    const n = this.settings.agents.count;
+    const data = new ArrayBuffer(Math.max(1, n) * AGENT_STRIDE_BYTES);
     const floats = new Float32Array(data);
     const words = new Uint32Array(data);
     const stride = AGENT_STRIDE_BYTES / 4;
-    for (let i = 0; i < this.settings.agents.count; i += 1) {
-      floats[i * stride] = ((i + 0.5) / this.settings.agents.count) * width;
+    for (let i = 0; i < n; i += 1) {
+      floats[i * stride] = ((i + 0.5) / n) * width;
       floats[i * stride + 1] = height * 0.95;
-      words[i * stride + 4] = packAgent({
-        alive: true,
-        mode: MODE_WALK,
-        facing: i % 2 === 0 ? 1 : -1,
-        timer: timerFor(hashU32(i), 30, 150),
-      });
+      words[i * stride + AGENT_STATE] = packAgent({ alive: true, mode: MODE_WALK, facing: i % 2 === 0 ? 1 : -1, timer: 1 });
+      floats[i * stride + AGENT_SCORE] = 0;
+      // Nearest-ever is measured where it lands, so the fall is not rewarded.
+      floats[i * stride + AGENT_CLOSEST] = CLOSEST_UNSET;
+      floats.set(brains.subarray(i * BRAIN_FLOATS, (i + 1) * BRAIN_FLOATS), i * stride + AGENT_BRAIN);
     }
     this.device.queue.writeBuffer(this.resources.agents, 0, data);
+    this.eliteCount = Math.min(elites.length, ELITE_CAPACITY);
+    this.resources.uploadElites(elites);
+  }
+
+  /**
+   * Ends a generation: reads every lemming's score and brain back, breeds the
+   * next population from the best of them, and respawns everyone. The frame
+   * loop carries on while the readback is in flight; the scores it reads are a
+   * frame or two stale, which is nothing against a twenty-second generation.
+   */
+  async #evolve() {
+    const n = this.settings.agents.count;
+    if (n === 0 || this.evolving) return;
+    this.evolving = true;
+    try {
+      const bytes = n * AGENT_STRIDE_BYTES;
+      const encoder = this.device.createCommandEncoder({ label: "generation-readback" });
+      encoder.copyBufferToBuffer(this.resources.agents, 0, this.resources.generation, 0, bytes);
+      this.device.queue.submit([encoder.finish()]);
+      await this.resources.generation.mapAsync(GPUMapMode.READ, 0, bytes);
+      const records = new Float32Array(this.resources.generation.getMappedRange(0, bytes).slice(0));
+      this.resources.generation.unmap();
+
+      const stride = AGENT_STRIDE_BYTES / 4;
+      const scores = new Float32Array(n);
+      const brains = new Float32Array(n * BRAIN_FLOATS);
+      for (let i = 0; i < n; i += 1) {
+        scores[i] = records[i * stride + AGENT_SCORE];
+        brains.set(records.subarray(i * stride + AGENT_BRAIN, i * stride + AGENT_BRAIN + BRAIN_FLOATS), i * BRAIN_FLOATS);
+      }
+      const generation = this.evolution.generation + 1;
+      const seed = hashU32(generation * 2654435761 + this.settings.seed);
+      const next = nextGeneration(brains, scores, seed, this.settings.evolution);
+      let best = -Infinity;
+      let total = 0;
+      for (const score of scores) { best = Math.max(best, score); total += score; }
+      this.evolution = { generation, best, mean: total / n, frame: 0, frames: this.settings.evolution.generationFrames };
+      this.population = { brains: next.brains, elites: next.elites };
+      this.#spawn(next.brains, next.elites);
+      this.onGeneration?.({ generation, count: n, brains: next.brains, elites: next.elites, best, mean: total / n });
+    } finally {
+      this.evolving = false;
+    }
   }
 
   /** @param {number} radius world pixels */
@@ -304,6 +432,13 @@ export class GroundTruthEngine {
     // The brush is a single-frame impulse; clear it once it has been dispatched.
     this.blast = { x: 0, y: 0, radius: 0, strength: 0 };
     this.drag = { x: 0, y: 0 };
+
+    if (!this.paused) {
+      this.evolution.frame += 1;
+      if (this.evolution.frame >= this.evolution.frames && !this.evolving) {
+        this.#evolve().catch((error) => this.#report(`Evolution failed: ${error instanceof Error ? error.message : error}`));
+      }
+    }
   }
 
   /** @param {string} message */
@@ -346,6 +481,8 @@ export class GroundTruthEngine {
       rubbleBond: settings.rubbleBond,
       drag: this.drag,
       agents: settings.agents,
+      eliteCount: this.eliteCount,
+      scent: { cellSize: this.scent.cellSize, cols: this.scent.cols },
       frameSeconds: settings.frameSeconds,
       waterSpread: settings.waterSpread,
     });

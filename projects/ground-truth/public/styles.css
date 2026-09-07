@@ -51,6 +51,14 @@ html, body {
   text-shadow: 0 0 14px rgba(255, 200, 60, .35);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
+  text-align: center;
+}
+
+#score small {
+  display: block;
+  font-size: .8rem;
+  color: var(--dim);
+  text-shadow: none;
 }
 
 #debug {

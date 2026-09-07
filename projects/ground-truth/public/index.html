@@ -12,7 +12,10 @@
 
     <p id="status">Starting up…</p>
 
-    <p id="score" aria-live="polite" aria-label="Gold mined"><span id="gold-value">0</span> gold</p>
+    <p id="score" aria-live="polite" aria-label="Gold mined">
+      <span id="gold-value">0</span> gold
+      <small id="generation-value">gen 0</small>
+    </p>
 
     <aside id="debug" aria-label="Simulation counters">
       <strong>GROUND TRUTH</strong>
@@ -48,6 +51,7 @@
         <button id="pause" type="button" aria-pressed="false">Pause</button>
         <button id="reset" type="button">Reset</button>
         <button id="reseed" type="button">New world</button>
+        <button id="forget" type="button" title="Start evolution over from random brains">Forget brains</button>
       </div>
     </form>
 

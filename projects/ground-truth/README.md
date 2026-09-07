@@ -210,15 +210,16 @@ ninety frames; 30 000 cells of lemming tunnels over ten seconds bring down
 
 ## Lemmings
 
-Small creatures walk the world, tunnel through it, and occasionally sit down and
-light a bomb.
+Small creatures walk the world and tunnel through it, each steered by a brain
+of its own. See **Brains**, below.
 
 They are not part of the field — sand does not rest on one — but they read it
 for every decision, so a tunnel one digs is a real tunnel and a floor blown out
-from under one really drops it. The walking rule is three lines and enough to
-follow the contour of a cave: nothing underfoot and it falls, whatever else it
-was doing; clear ahead and it walks on; one cell in the way and it steps up;
-anything taller and it turns round.
+from under one really drops it. Beneath the brain there is a reflex of three
+lines, enough to follow the contour of a cave: nothing underfoot and it falls,
+whatever else it was doing; clear ahead and it walks on; one cell in the way
+and it steps up; anything taller and it turns round. The brain decides whether
+to walk, dig or turn; the reflex does the rest.
 
 **They come apart.** A lemming is drawn as a little block of pixels, and when
 something tears through it fast enough that block is released into the particle
@@ -233,10 +234,13 @@ be — its own height plus headroom, cut two columns ahead so the working face i
 always clear of the sprite. Bedrock is beyond a lemming, and water is not dug
 but drowned in. Six hundred of them excavate fifty to ninety cells a frame.
 
-Detonating is the one thing a lemming does that **pops free slots from the
+Coming apart is the one thing a lemming does that **pops free slots from the
 same pool budget the world uses**, which is why `step_agents` runs before
-`emit` rather than after. A bomb leaves real emptiness, not placeholder, so
-what it undermines comes down.
+`emit` rather than after.
+
+There used to be a bomb. It is gone: with survival part of the score, a
+self-destruct is just a way to score nothing, and a three-action space evolves
+faster than a four.
 
 ### Two markers in the overlay
 
@@ -250,11 +254,93 @@ has no room for a velocity, and this is the one bit of it that matters — and
 bits, so `atomicMax` keeps a fast pixel visible over a lemming and a lemming
 over ordinary material, and the composite masks them off.
 
-Lost lemmings are replaced after a delay. Without that the population only ever
-falls — a bomb kills the bomber and the debris takes its neighbours — and the
-world goes quiet inside half a minute. Measured over 1 700 frames it holds
-steady: 600 spawned, 534 alive after 500 frames, 540 after 1 700, with around a
-hundred digging at any moment.
+Lost lemmings are replaced after a delay. Without that the population only
+ever falls — floods and falling rock take them — and the world goes quiet inside
+half a minute. Who comes back is the interesting part: see below.
+
+## Brains
+
+Every lemming carries its own neural net, and no lemming was ever trained: they
+are **evolved**. This is neuroevolution — a genetic algorithm over the weights,
+not a GAN and not gradient descent — and it is why the whole thing fits inside
+the compute pass that already existed.
+
+The net is tiny: twelve senses, eight `tanh` hidden units, three actions, 131
+weights. It lives *inline in the lemming's record*, after its body, so the
+forward pass, the elite clone on respawn and the once-a-generation readback all
+touch one buffer through one binding. Inference runs on the GPU in
+`step_agents`, once every four frames per lemming; a forward pass this size
+costs less than the sand rule costs per cell, and there are at most four
+thousand of them. Nothing off the shelf does per-agent nets inside a compute
+shader, and the whole of it — `think` in WGSL, `forward` in JavaScript, and a
+contract test pinning them to the same topology — is a few dozen lines.
+
+**What it feels.** Everything is in the lemming's own frame — "ahead" is the way
+it faces — so a brain does not have to learn the world twice over:
+
+| sense | |
+| --- | --- |
+| bias | always one |
+| drop ahead | nothing under the cell ahead: a pit, a cliff, a tunnel's end |
+| ahead, above ahead | the cell ahead is solid; the one above it is too |
+| hardness | how hard the cell ahead is to dig, 0 open to 1 bedrock |
+| water | water within a few cells ahead — fatal, so worth a sense of its own |
+| facing | −1 or 1 |
+| scent | direction to the nearest gold, ahead-positive, and how near it is |
+| gold ahead | gold in one of the two cells ahead |
+| digging | whether it is digging now, so it can learn to keep at it |
+
+The **scent** is baked once at generation: a coarse grid holding the centre of
+the nearest nugget to each cell, 64 KB, in a uniform. The grid only decides
+*which* nugget is nearest; the vector to it is taken from the lemming's true
+position, so its coarseness costs nothing but a little error on the boundary
+between two nuggets' territories. A lemming smells gold within 1 024 cells.
+
+**What it does.** Walk, dig, or turn — whichever output is largest, held for
+four frames, then asked again.
+
+**What it is scored on.** Fifty per cell of gold dug through, which is what the
+whole thing is for. But gold is rare, and a first generation of random brains
+would all score exactly zero with nothing to select on — so a lemming is also
+paid one point per cell for getting *nearer to gold than it has ever been*, and
+docked two hundred for dying. That approach term is what turns a flat landscape
+into a slope evolution can climb.
+
+**How they breed.** A generation is twenty seconds. At the end of it every
+record — score and brain — is read back, 2 MB, the top tenth keep their slots
+and their weights untouched, and every other slot becomes the mutated cross of
+two of them: each weight from one parent or the other, about a tenth of them
+nudged. All of it is a pure function of the seed, so a run can be replayed.
+
+**Only successful nets are ever respawned.** A lemming that drowns or is
+smashed mid-generation comes back, after a delay, as a *clone of a current
+elite* — the shader copies the brain out of one of the slots the last selection
+named. The elite keep their slots precisely so that list stays valid until the
+next generation.
+
+Diggers are drawn orange and walkers green, so you can watch what each brain
+decided.
+
+**The population is saved after every generation** — every brain, who the
+elite are, and the generation count — to IndexedDB, and picked up again on the
+next visit, so a reload does not throw away twenty minutes of evolution. Reset,
+New world and the lemmings slider all keep the brains too: more lemmings than
+brains and the newcomers are mutated copies of what was learned, fewer and the
+rest are dropped. **Forget brains** starts over from generation 0. A saved
+record is checked before it is trusted — version, shape, every weight finite —
+and dropped if it fails.
+
+**Measured**, with generations shortened to 400 frames so several fit a run:
+mean score 17 → 18 → 30 → 26 over four generations, best 106 → 135, with 394
+of 600 lemmings scoring something 200 frames into a generation and a spread of
+19 points across the population — a slope, in other words. A crew of 600
+dropped beside a nugget had 571 digging at it a second later. Before the
+landing rule every lemming scored the same 750-odd points for falling out of
+the sky, generation after generation, and nothing moved.
+
+What this is not, yet, is a solved game: four short generations do not breed
+a prospector. It is the loop — sense, act, score, select, respawn the winners —
+running end to end on the GPU, with a real signal on the slope.
 
 ## Gold
 
@@ -278,9 +364,8 @@ for a material tag — so a nugget blown out of a wall and settled somewhere els
 can only still be gold if gold is recognised by its colour. The thresholds sit
 outside every other material's grain, and a test proves it stays that way.
 
-A crew placed beside a nugget and set digging mines 19 cells of it in forty
-frames. Six hundred lemmings left to wander for ten seconds mine none: the gold
-is there to be led to.
+A crew placed beside a nugget and set digging mines fifty cells of it in forty
+frames. Whether a lemming left to itself finds any is now up to its brain.
 
 ## The brush
 
@@ -508,16 +593,19 @@ Requires a browser with WebGPU.
 | `drowned/f` | lemmings lost to water this frame |
 | `sank/f` | cells that traded places with the water beneath them this frame |
 | `gold mined` | the score: cells of gold lemmings have dug through, ever |
+| `generation` | which generation, and how far through it |
+| `best score` / `mean score` | how the last generation did before it was bred from |
 | `view` / `zoom` | where the camera is and how far in |
 
 ## Layout
 
 | Path | What lives there |
 | --- | --- |
-| `src/core/` | Pure logic: cell encoding, cohesion and the sand rule, geometry, the integrator, the camera, noise, world generation, buffer layouts. No GPU, fully unit-tested. |
+| `src/core/` | Pure logic: cell encoding, cohesion and the sand rule, geometry, the integrator, the camera, noise, world generation, buffer layouts, the lemming brain and how it breeds, the scent of gold. No GPU, fully unit-tested. |
 | `src/gpu/` | Device acquisition, pipelines, buffer ownership, non-blocking readback. |
 | `src/gpu/shaders/` | `simulation.wgsl` (ten compute entry points) and `composite.wgsl`. |
 | `src/worker/` | World generation, off the main thread. |
+| `src/storage/` | Where the population is kept between visits. |
 | `src/ui/` | Debug-panel formatting and the frame-rate meter. |
 | `test/` | `node --test` suites, including a contract test that fails if the shader and the JavaScript memory layouts drift apart. |
 
@@ -529,7 +617,7 @@ prepare  →  integrate ×4  →  advance  →  settle  →  step_agents
 ```
 
 `settle` only ever **pushes** to the free-slot ring; `emit` and `step_agents`
-(for a bomb — digging costs nothing) only ever **pop** from it. Because they are separate dispatches, a slot can never be
+(for a lemming coming apart — digging costs nothing) only ever **pop** from it. Because they are separate dispatches, a slot can never be
 handed to two pixels at once — no compare-and-swap on the ring is needed. `emit`
 claims from a pop budget snapshotted by `prepare`, so its head index can never
 overrun the tail.

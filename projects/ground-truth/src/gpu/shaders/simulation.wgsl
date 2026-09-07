@@ -68,7 +68,6 @@ const BLAST_RIM: f32 = 0.25;
 // Lemmings. See `src/core/agents.js` for the rules these mirror.
 const MODE_WALK: u32 = 0u;
 const MODE_DIG: u32  = 1u;
-const MODE_FUSE: u32 = 2u;
 const AGENT_TIMER_MASK: u32 = 0x000000ffu;
 const AGENT_FACING_BIT: u32 = 0x00000100u;
 const AGENT_MODE_SHIFT: u32 = 9u;
@@ -79,6 +78,45 @@ const AGENT_HALF_W: i32 = 1;
 const AGENT_HEIGHT: i32 = 4;
 // Speed a pixel must be doing to knock one apart.
 const AGENT_SHATTER_SPEED: f32 = 240.0;
+// A lemming's brain: topology, weight layout, senses, actions and what it is
+// scored on. All mirrored from `src/core/brain.js`, which is where they are
+// explained; the contract test keeps the two in step.
+const INPUTS: u32  = 12u;
+const HIDDEN: u32  = 8u;
+const OUTPUTS: u32 = 3u;
+const BRAIN_W1: u32 = 0u;
+const BRAIN_B1: u32 = 96u;
+const BRAIN_W2: u32 = 104u;
+const BRAIN_B2: u32 = 128u;
+const BRAIN_FLOATS: u32 = 131u;
+const INPUT_BIAS: u32        = 0u;
+const INPUT_DROP_AHEAD: u32  = 1u;
+const INPUT_AHEAD: u32       = 2u;
+const INPUT_ABOVE_AHEAD: u32 = 3u;
+const INPUT_HARDNESS: u32    = 4u;
+const INPUT_WATER: u32       = 5u;
+const INPUT_FACING: u32      = 6u;
+const INPUT_SCENT_X: u32     = 7u;
+const INPUT_SCENT_Y: u32     = 8u;
+const INPUT_SCENT_NEAR: u32  = 9u;
+const INPUT_GOLD_AHEAD: u32  = 10u;
+const INPUT_DIGGING: u32     = 11u;
+const ACTION_WALK: u32 = 0u;
+const ACTION_DIG: u32  = 1u;
+const ACTION_TURN: u32 = 2u;
+const GOLD_REWARD: f32     = 50.0;
+const APPROACH_REWARD: f32 = 1.0;
+const DEATH_PENALTY: f32   = 200.0;
+const SCENT_RANGE: f32     = 1024.0;
+const DECISION_HOLD: u32   = 4u;
+// Nearest-ever distance to gold before a lemming has stood anywhere.
+const CLOSEST_UNSET: f32   = -1.0;
+// Cells in the scent grid: two floats each, so exactly the 64 KB uniform.
+const SCENT_CELLS: u32 = 8192u;
+// What `dig_cell` found.
+const DUG_NOTHING: u32 = 0u;
+const DUG_ROCK: u32    = 1u;
+const DUG_GOLD: u32    = 2u;
 // Frames before a lost lemming is replaced. Without this the population only
 // ever falls — bombs kill the bomber and the debris takes the neighbours — and
 // the world goes quiet after half a minute.
@@ -119,11 +157,14 @@ struct Params {
   brush_drag: vec2f,
   agent_count: u32,
   agent_speed: f32,
-  agent_bomb_chance: f32,
-  agent_blast: f32,
+  // How many of `elites` are valid: who a dead lemming may be cloned from.
+  elite_count: u32,
+  // Size of a scent cell in world cells, and how many across.
+  scent_cell: f32,
   // Agents step once a frame, not once a substep, so they need the whole tick.
   frame_seconds: f32,
   water_spread: f32,
+  scent_cols: u32,
 };
 
 // Scalars, not vec2f: a vec2f would align this to eight bytes and pad it to 24.
@@ -136,12 +177,17 @@ struct Particle {
   last_cell: u32,
 };
 
+// A lemming: its body, its score, and its brain, inline. See `src/core/brain.js`.
 struct Agent {
   pos_x: f32,
   pos_y: f32,
   vel_x: f32,
   vel_y: f32,
   state: u32,
+  score: f32,
+  // Nearest it has ever been to gold, for the approach reward.
+  closest: f32,
+  brain: array<f32, 131>,
 };
 
 struct Counters {
@@ -175,6 +221,11 @@ struct Counters {
 // it with. Two f16 packed into a word; non-zero only while DISLODGE_BIT is set.
 @group(0) @binding(7) var<storage, read_write> impulse: array<atomic<u32>>;
 @group(0) @binding(8) var<storage, read_write> agents: array<Agent>;
+// The nearest nugget to every coarse cell, two cells to a vec4. Baked once at
+// generation; see `src/core/scent.js`.
+@group(0) @binding(9) var<uniform> scent: array<vec4f, 4096>;
+// Slots of this generation's elite, four to a vec4, `params.elite_count` valid.
+@group(0) @binding(10) var<uniform> elites: array<vec4u, 256>;
 
 // A dispatch wider than 65535 workgroups is illegal, so large grids are folded
 // into two dimensions and unfolded here. See `dispatchGrid` in core/layout.js.
@@ -918,31 +969,17 @@ fn is_gold(word: u32) -> bool {
 // tunnel keeps its shape and holds its own roof up, and it costs the pool
 // nothing. Bedrock is beyond a lemming; water is not dug but drowned in. Gold
 // dug through is gold mined.
-fn dig_cell(x: i32, y: i32) -> bool {
-  if (!in_bounds(x, y)) { return false; }
+fn dig_cell(x: i32, y: i32) -> u32 {
+  if (!in_bounds(x, y)) { return DUG_NOTHING; }
   let c = cell_index(x, y);
   let value = atomicLoad(&field[c]);
-  if (value == 0u || is_void(value) || is_water(value) || bond_of(value) == 0u) { return false; }
-  if (!atomicCompareExchangeWeak(&field[c], value, VOID_CELL).exchanged) { return false; }
-  if (is_gold(value)) { atomicAdd(&counters.gold, 1u); }
-  return true;
-}
-
-// Releases one cell into the pool with a velocity, for the bomb. Returns
-// whether a slot was free.
-fn release_cell(x: i32, y: i32, vel: vec2f) -> bool {
-  if (!in_bounds(x, y)) { return false; }
-  let c = cell_index(x, y);
-  let value = atomicLoad(&field[c]);
-  if (value == 0u || bond_of(value) == 0u) { return false; }
-  let budget = atomicSub(&counters.pop_budget, 1);
-  if (budget <= 0) { return false; }
-  let slot = free_ring[atomicAdd(&counters.head, 1u) & params.ring_mask];
-  atomicStore(&field[c], 0u);
-  particles[slot] = Particle(f32(x) + 0.5, f32(y) + 0.5, vel.x, vel.y, SKY_CELL);
-  states[slot] = (value & MATERIAL_MASK) | STATE_ALIVE_BIT;
-  atomicAdd(&counters.emitted, 1u);
-  return true;
+  if (value == 0u || is_void(value) || is_water(value) || bond_of(value) == 0u) { return DUG_NOTHING; }
+  if (!atomicCompareExchangeWeak(&field[c], value, VOID_CELL).exchanged) { return DUG_NOTHING; }
+  if (is_gold(value)) {
+    atomicAdd(&counters.gold, 1u);
+    return DUG_GOLD;
+  }
+  return DUG_ROCK;
 }
 
 // A lemming coming apart into its own pixels. Its body is not part of the
@@ -966,164 +1003,286 @@ fn shatter(index: u32, x: i32, y: i32, colour: u32) {
   }
 }
 
-// Walks the lemmings, and lets them dig and detonate. One thread apiece, and
-// there are few of them, so this is the cheapest pass in the frame.
+// The cell word at a position, or nothing outside the world.
+fn word_at(x: i32, y: i32) -> u32 {
+  if (!in_bounds(x, y)) { return 0u; }
+  return atomicLoad(&field[cell_index(x, y)]);
+}
+
+// How hard a cell is to dig, as a brain feels it: nothing for open space or
+// the placeholder, one for bedrock, and softer the looser it is.
+fn hardness_of(word: u32) -> f32 {
+  if (word == 0u || is_void(word) || is_water(word)) { return 0.0; }
+  let bond = bond_of(word);
+  if (bond == 0u) { return 1.0; }
+  return 1.0 - f32(bond) / 8.0;
+}
+
+// Water within a few cells ahead, at any height a lemming spans.
+fn water_near(x: i32, y: i32, facing: i32) -> bool {
+  for (var step = 1; step <= 3; step += 1) {
+    for (var dy = -1; dy <= AGENT_HEIGHT; dy += 1) {
+      if (is_water(word_at(x + facing * step, y + dy))) { return true; }
+    }
+  }
+  return false;
+}
+
+// The nearest nugget to a position, from the grid baked at generation. The grid
+// only decides *which* nugget is nearest; the vector to it is taken from the
+// lemming's true position. See `src/core/scent.js`.
+fn scent_at(pos: vec2f) -> vec2f {
+  let col = min(u32(max(pos.x, 0.0) / params.scent_cell), params.scent_cols - 1u);
+  let row = u32(max(pos.y, 0.0) / params.scent_cell);
+  let idx = min(row * params.scent_cols + col, SCENT_CELLS - 1u);
+  let pair = scent[idx >> 1u];
+  if ((idx & 1u) == 1u) { return pair.zw; }
+  return pair.xy;
+}
+
+// The k-th elite's slot, from the list the CPU wrote at the last generation.
+fn elite_slot(k: u32) -> u32 {
+  var four = elites[k >> 2u];
+  return four[k & 3u];
+}
+
+// One forward pass of a lemming's brain, read straight out of its record.
+// Hidden units are tanh; the action is the largest output. Mirrors `forward`
+// and `decide` in `src/core/brain.js`.
+fn think(i: u32, inputs: ptr<function, array<f32, INPUTS>>) -> u32 {
+  var hidden: array<f32, HIDDEN>;
+  for (var h = 0u; h < HIDDEN; h += 1u) {
+    var sum = agents[i].brain[BRAIN_B1 + h];
+    for (var k = 0u; k < INPUTS; k += 1u) {
+      sum += agents[i].brain[BRAIN_W1 + h * INPUTS + k] * (*inputs)[k];
+    }
+    hidden[h] = tanh(sum);
+  }
+  var best = 0u;
+  var best_score = -1e30;
+  for (var o = 0u; o < OUTPUTS; o += 1u) {
+    var sum = agents[i].brain[BRAIN_B2 + o];
+    for (var h = 0u; h < HIDDEN; h += 1u) {
+      sum += agents[i].brain[BRAIN_W2 + o * HIDDEN + h] * hidden[h];
+    }
+    if (sum > best_score) {
+      best_score = sum;
+      best = o;
+    }
+  }
+  return best;
+}
+
+// A lemming is lost. The penalty stays on its score until the slot is reborn.
+fn die(i: u32, score: f32) {
+  agents[i].vel_x = 0.0;
+  agents[i].vel_y = 0.0;
+  agents[i].score = score - DEATH_PENALTY;
+  agents[i].state = AGENT_RESPAWN + (hash_u32(i ^ params.frame) % 100u);
+}
+
+// A lost lemming is replaced, and only successful nets are ever respawned: the
+// newcomer is a clone of one of this generation's elite, dropped in from the
+// sky somewhere at random. Without a replacement at all the population only
+// ever falls and the world goes quiet inside half a minute.
+fn respawn(i: u32) {
+  let born = hash_u32(i * 40503u + params.frame);
+  var packed = AGENT_ALIVE_BIT | (MODE_WALK << AGENT_MODE_SHIFT) | DECISION_HOLD;
+  if ((born & 1u) == 1u) { packed |= AGENT_FACING_BIT; }
+  if (params.elite_count > 0u) {
+    let e = elite_slot(born % params.elite_count);
+    if (e != i) {
+      for (var k = 0u; k < BRAIN_FLOATS; k += 1u) { agents[i].brain[k] = agents[e].brain[k]; }
+    }
+  }
+  let pos = vec2f(rand01(born ^ 0x77u) * f32(params.world.x), f32(params.world.y) * 0.97);
+  agents[i].pos_x = pos.x;
+  agents[i].pos_y = pos.y;
+  agents[i].vel_x = 0.0;
+  agents[i].vel_y = 0.0;
+  agents[i].state = packed;
+  agents[i].score = 0.0;
+  agents[i].closest = CLOSEST_UNSET;
+}
+
+// Lemmings. Each is steered by its own brain — see `think` and
+// `src/core/brain.js` — asked every DECISION_HOLD frames what to do given what
+// it can feel, and scored for getting nearer to gold and for digging through
+// it. There are few of them, so this is the cheapest pass in the frame.
 //
-// It runs before `emit` so a lemming digging or blowing up competes for free
-// slots on the same budget the world does, rather than on top of it.
+// It runs before `emit` so a lemming coming apart competes for free slots on
+// the same budget the world does, rather than on top of it.
 @compute @workgroup_size(256)
 fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) groups: vec3u) {
   let i = linear_index(gid, groups);
   if (i >= params.agent_count) { return; }
-  var a = agents[i];
-  if ((a.state & AGENT_ALIVE_BIT) == 0u) {
+  let state = agents[i].state;
+  if ((state & AGENT_ALIVE_BIT) == 0u) {
     // Gone, and counting down to a replacement. The timer bits are reused: a
     // dead slot has no mode or facing to remember.
-    let waiting = a.state & AGENT_TIMER_MASK;
+    let waiting = state & AGENT_TIMER_MASK;
     if (waiting > 1u) {
-      agents[i] = Agent(a.pos_x, a.pos_y, 0.0, 0.0, waiting - 1u);
+      agents[i].state = waiting - 1u;
       return;
     }
-    let born = hash_u32(i * 40503u + params.frame);
-    var packed = AGENT_ALIVE_BIT | (MODE_WALK << AGENT_MODE_SHIFT) | (40u + (born % 140u));
-    if ((born & 1u) == 1u) { packed |= AGENT_FACING_BIT; }
-    agents[i] = Agent(
-      rand01(born ^ 0x77u) * f32(params.world.x),
-      f32(params.world.y) * 0.97,
-      0.0, 0.0, packed,
-    );
+    respawn(i);
     return;
   }
 
-  let x = i32(floor(a.pos_x));
-  let y = i32(floor(a.pos_y));
+  var pos_x = agents[i].pos_x;
+  var pos_y = agents[i].pos_y;
+  var vel_y = agents[i].vel_y;
+  var score = agents[i].score;
+  var closest = agents[i].closest;
+  let x = i32(floor(pos_x));
+  let y = i32(floor(pos_y));
   let colour = 0x00e8d0u;
 
-  // Anything hurtling through takes it apart: the same bargain the rest of the
-  // world makes, hold together until something hits hard enough.
   // Water is fatal on contact. A lemming caught by a flood does not decohere
   // into a spray of its own pixels the way one crushed by rock does — it simply
   // goes under, so there is nothing to release.
   if (touches_water(x, y)) {
     atomicAdd(&counters.drowned, 1u);
-    agents[i] = Agent(a.pos_x, a.pos_y, 0.0, 0.0,
-      AGENT_RESPAWN + (hash_u32(i ^ params.frame) % 100u));
+    die(i, score);
     return;
   }
-
+  // Anything hurtling through takes it apart: the same bargain the rest of the
+  // world makes, hold together until something hits hard enough.
   if (struck_by_debris(x, y)) {
     shatter(i, x, y, colour);
-    agents[i] = Agent(a.pos_x, a.pos_y, 0.0, 0.0,
-      AGENT_RESPAWN + (hash_u32(i ^ params.frame) % 100u));
+    die(i, score);
     return;
   }
 
   atomicAdd(&counters.walking, 1u);
-  var timer = a.state & AGENT_TIMER_MASK;
-  var mode = (a.state & AGENT_MODE_MASK) >> AGENT_MODE_SHIFT;
+  var timer = state & AGENT_TIMER_MASK;
+  var mode = (state & AGENT_MODE_MASK) >> AGENT_MODE_SHIFT;
   var facing = -1;
-  if ((a.state & AGENT_FACING_BIT) != 0u) { facing = 1; }
-  let seed = hash_u32(i * 2654435761u + params.frame);
+  if ((state & AGENT_FACING_BIT) != 0u) { facing = 1; }
 
   // Nothing underfoot beats everything else: a lemming whose floor has been dug
   // away or blown out falls, whatever it was doing.
   if (!blocked_at(x, y - 1)) {
-    a.vel_y -= params.gravity * params.frame_seconds;
-    let next = a.pos_y + a.vel_y * params.frame_seconds;
+    vel_y -= params.gravity * params.frame_seconds;
+    let next = pos_y + vel_y * params.frame_seconds;
     if (blocked_at(x, i32(floor(next)))) {
-      a.vel_y = 0.0;
+      vel_y = 0.0;
     } else {
-      a.pos_y = clamp(next, 0.0, f32(params.world.y) - EDGE_EPSILON);
+      pos_y = clamp(next, 0.0, f32(params.world.y) - EDGE_EPSILON);
     }
-    agents[i] = Agent(a.pos_x, a.pos_y, 0.0, a.vel_y, a.state);
+    agents[i].pos_y = pos_y;
+    agents[i].vel_x = 0.0;
+    agents[i].vel_y = vel_y;
     return;
   }
-  a.vel_y = 0.0;
 
-  if (mode == MODE_FUSE && timer <= 1u) {
-    // The bomb. Everything within the radius leaves with momentum pointing
-    // away, and the lemming goes with it.
-    let r = i32(params.agent_blast);
-    for (var dy = -r; dy <= r; dy += 1) {
-      for (var dx = -r; dx <= r; dx += 1) {
-        let d = sqrt(f32(dx * dx + dy * dy));
-        if (d > f32(r)) { continue; }
-        let away = vec2f(f32(dx), f32(dy)) / max(d, 1.0);
-        release_cell(x + dx, y + dy, away * params.blast.w * (1.0 - d / f32(r)) * 0.5);
-      }
+  // Nearer to gold than it has ever been is worth something. Gold is rare, so
+  // without this every brain in an early generation scores nothing at all and
+  // there is nothing to select on. The measure starts where the lemming first
+  // stands, not where it was dropped: paid from the sky, every lemming earned
+  // the same seven hundred points for falling, and that too is nothing to
+  // select on.
+  let pos = vec2f(pos_x, pos_y);
+  let toward = scent_at(pos) - pos;
+  let dist = length(toward);
+  let smells = dist < SCENT_RANGE;
+  if (closest < 0.0) {
+    closest = min(dist, SCENT_RANGE);
+  } else if (smells && dist < closest) {
+    score += (closest - dist) * APPROACH_REWARD;
+    closest = dist;
+  }
+
+  if (timer <= 1u) {
+    // Ask the brain. Everything is in the lemming's own frame — ahead is the
+    // way it faces — so it need not learn the world twice over.
+    let ahead = word_at(x + facing, y);
+    var inputs: array<f32, INPUTS>;
+    inputs[INPUT_BIAS] = 1.0;
+    inputs[INPUT_DROP_AHEAD] = select(0.0, 1.0, !blocked_at(x + facing, y - 1));
+    inputs[INPUT_AHEAD] = select(0.0, 1.0, blocked_at(x + facing, y));
+    inputs[INPUT_ABOVE_AHEAD] = select(0.0, 1.0, blocked_at(x + facing, y + 1));
+    inputs[INPUT_HARDNESS] = hardness_of(ahead);
+    inputs[INPUT_WATER] = select(0.0, 1.0, water_near(x, y, facing));
+    inputs[INPUT_FACING] = f32(facing);
+    inputs[INPUT_SCENT_X] = select(0.0, toward.x * f32(facing) / max(dist, 1.0), smells);
+    inputs[INPUT_SCENT_Y] = select(0.0, toward.y / max(dist, 1.0), smells);
+    inputs[INPUT_SCENT_NEAR] = select(0.0, 1.0 - dist / SCENT_RANGE, smells);
+    inputs[INPUT_GOLD_AHEAD] = select(0.0, 1.0, is_gold(ahead) || is_gold(word_at(x + 2 * facing, y)));
+    inputs[INPUT_DIGGING] = select(0.0, 1.0, mode == MODE_DIG);
+    let action = think(i, &inputs);
+    if (action == ACTION_TURN) {
+      facing = -facing;
+      mode = MODE_WALK;
+    } else if (action == ACTION_DIG) {
+      mode = MODE_DIG;
+    } else {
+      mode = MODE_WALK;
     }
-    shatter(i, x, y, colour);
-    agents[i] = Agent(a.pos_x, a.pos_y, 0.0, 0.0,
-      AGENT_RESPAWN + (hash_u32(i ^ params.frame) % 100u));
-    return;
+    timer = DECISION_HOLD;
+  } else {
+    timer -= 1u;
   }
 
   if (mode == MODE_DIG) {
     // A tunnel one cell bigger than the lemming in every direction it can be:
     // its own height plus headroom, cut two columns ahead so the working face
     // is always clear of the sprite. Nothing is released and nothing is spent
-    // from the pool — see `dig_cell`.
+    // from the pool — see `dig_cell`. Gold dug through is what it is all for.
     var dug = 0u;
     for (var step = 1; step <= 2; step += 1) {
       for (var dy = 0; dy <= AGENT_HEIGHT; dy += 1) {
-        if (dig_cell(x + facing * step, y + dy)) { dug += 1u; }
+        let found = dig_cell(x + facing * step, y + dy);
+        if (found != DUG_NOTHING) { dug += 1u; }
+        if (found == DUG_GOLD) { score += GOLD_REWARD; }
       }
     }
     atomicAdd(&counters.dug, dug);
     // Digging is slower going than walking.
     if (!blocked_at(x + facing, y)) {
-      a.pos_x = clamp(a.pos_x + f32(facing) * params.agent_speed * params.frame_seconds * 0.5,
+      pos_x = clamp(pos_x + f32(facing) * params.agent_speed * params.frame_seconds * 0.5,
         0.0, f32(params.world.x) - EDGE_EPSILON);
     }
   } else {
     // Walking. Clear ahead and it walks on; a single cell in the way and it
-    // steps up; anything taller and it turns round.
+    // steps up; anything taller and it turns round — a reflex the brain does
+    // not have to learn, though it may turn of its own accord as well.
     let ahead = blocked_at(x + facing, y);
     if (!ahead) {
-      a.pos_x = clamp(a.pos_x + f32(facing) * params.agent_speed * params.frame_seconds,
+      pos_x = clamp(pos_x + f32(facing) * params.agent_speed * params.frame_seconds,
         0.0, f32(params.world.x) - EDGE_EPSILON);
     } else if (!blocked_at(x + facing, y + 1)) {
-      a.pos_x = clamp(a.pos_x + f32(facing) * 0.6, 0.0, f32(params.world.x) - EDGE_EPSILON);
-      a.pos_y = clamp(a.pos_y + 1.0, 0.0, f32(params.world.y) - EDGE_EPSILON);
+      pos_x = clamp(pos_x + f32(facing) * 0.6, 0.0, f32(params.world.x) - EDGE_EPSILON);
+      pos_y = clamp(pos_y + 1.0, 0.0, f32(params.world.y) - EDGE_EPSILON);
     } else {
       facing = -facing;
     }
   }
 
-  if (timer > 1u) {
-    timer -= 1u;
-  } else if (mode != MODE_WALK) {
-    mode = MODE_WALK;
-    timer = 60u + (seed % 120u);
-  } else if (rand01(seed ^ 0x2f1cu) < params.agent_bomb_chance) {
-    mode = MODE_FUSE;
-    timer = 70u + (seed % 90u);
-  } else {
-    mode = MODE_DIG;
-    timer = 25u + (seed % 70u);
-  }
-
   var packed = AGENT_ALIVE_BIT | (mode << AGENT_MODE_SHIFT) | timer;
   if (facing > 0) { packed |= AGENT_FACING_BIT; }
-  agents[i] = Agent(a.pos_x, a.pos_y, 0.0, 0.0, packed);
+  agents[i].pos_x = pos_x;
+  agents[i].pos_y = pos_y;
+  agents[i].vel_x = 0.0;
+  agents[i].vel_y = 0.0;
+  agents[i].state = packed;
+  agents[i].score = score;
+  agents[i].closest = closest;
 }
 
 // Draws the lemmings, after `emit` has cleared the overlay and `splat` has
-// filled it with this frame's moving pixels.
+// filled it with this frame's moving pixels. Diggers are orange and walkers
+// green, so you can see what each brain decided.
 @compute @workgroup_size(256)
 fn draw_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) groups: vec3u) {
   let i = linear_index(gid, groups);
   if (i >= params.agent_count) { return; }
-  let a = agents[i];
-  if ((a.state & AGENT_ALIVE_BIT) == 0u) { return; }
-  // A lit fuse blinks, faster as it runs down, so you can see one coming.
+  let state = agents[i].state;
+  if ((state & AGENT_ALIVE_BIT) == 0u) { return; }
   var colour = 0x00e8d0u;
-  if (((a.state & AGENT_MODE_MASK) >> AGENT_MODE_SHIFT) == MODE_FUSE) {
-    let timer = a.state & AGENT_TIMER_MASK;
-    if (((params.frame / (timer / 10u + 1u)) & 1u) == 0u) { colour = 0x3040ffu; }
-  }
-  let x = i32(floor(a.pos_x));
-  let y = i32(floor(a.pos_y));
+  if (((state & AGENT_MODE_MASK) >> AGENT_MODE_SHIFT) == MODE_DIG) { colour = 0x2090ffu; }
+  let x = i32(floor(agents[i].pos_x));
+  let y = i32(floor(agents[i].pos_y));
   for (var dy = 0; dy < AGENT_HEIGHT; dy += 1) {
     for (var dx = -AGENT_HALF_W; dx <= AGENT_HALF_W; dx += 1) {
       if (!in_bounds(x + dx, y + dy)) { continue; }

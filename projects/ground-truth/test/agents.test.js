@@ -5,17 +5,15 @@ import {
   AGENT_ALIVE_BIT,
   MAX_AGENT_TIMER,
   MODE_DIG,
-  MODE_FUSE,
   MODE_WALK,
   packAgent,
   tick,
-  timerFor,
   unpackAgent,
   walkDecision,
 } from "../src/core/agents.js";
 
 test("an agent round-trips through its packed word", () => {
-  for (const mode of [MODE_WALK, MODE_DIG, MODE_FUSE]) {
+  for (const mode of [MODE_WALK, MODE_DIG]) {
     for (const facing of [-1, 1]) {
       const agent = { alive: true, mode, facing, timer: 37 };
       assert.deepEqual(unpackAgent(packAgent(agent)), agent);
@@ -24,7 +22,7 @@ test("an agent round-trips through its packed word", () => {
 });
 
 test("a dead agent is dead whatever else the word says", () => {
-  const word = packAgent({ alive: false, mode: MODE_FUSE, facing: 1, timer: 9 });
+  const word = packAgent({ alive: false, mode: MODE_DIG, facing: 1, timer: 9 });
   assert.equal(word & AGENT_ALIVE_BIT, 0);
   assert.equal(unpackAgent(word).alive, false);
 });
@@ -83,14 +81,3 @@ test("a countdown reaches zero and fires exactly once", () => {
   assert.equal(timer, 0);
 });
 
-test("timers are deterministic and stay inside their range", () => {
-  for (let seed = 0; seed < 200; seed += 1) {
-    const value = timerFor(seed, 30, 90);
-    assert.ok(value >= 30 && value <= 90, `seed ${seed} gave ${value}`);
-    assert.equal(value, timerFor(seed, 30, 90), "and must be repeatable");
-  }
-});
-
-test("a degenerate range does not divide by zero", () => {
-  assert.equal(timerFor(7, 40, 40), 40);
-});

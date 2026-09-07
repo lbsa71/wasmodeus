@@ -4,7 +4,8 @@
  * the capacity slider moves.
  */
 import { COUNTERS_BYTES, counterIndex } from "../core/counters.js";
-import { AGENT_CAPACITY, AGENT_STRIDE_BYTES, PARAMS_BYTES, PARTICLE_STRIDE_BYTES, STATE_BYTES } from "../core/layout.js";
+import { AGENT_CAPACITY, AGENT_STRIDE_BYTES, PARAMS_BYTES, PARTICLE_STRIDE_BYTES, STATE_BYTES, ELITES_BYTES } from "../core/layout.js";
+import { NO_SCENT, SCENT_BYTES } from "../core/scent.js";
 import { ringSize } from "../core/capacity.js";
 
 /** How many counter staging buffers to cycle through before stalling. */
@@ -56,6 +57,24 @@ export class SimulationResources {
       size: COUNTERS_BYTES,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
+    // The nearest nugget to every coarse cell, and who this generation's elite
+    // are. See `src/core/scent.js` and `src/core/brain.js`.
+    this.scent = device.createBuffer({
+      label: "scent",
+      size: SCENT_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.elites = device.createBuffer({
+      label: "elites",
+      size: ELITES_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    // Where a generation's records land to be read back and bred from.
+    this.generation = device.createBuffer({
+      label: "generation-readback",
+      size: AGENT_CAPACITY * AGENT_STRIDE_BYTES,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
     /** @type {GPUBuffer|null} */ this.particles = null;
     /** @type {GPUBuffer|null} */ this.states = null;
     /** @type {GPUBuffer|null} */ this.freeRing = null;
@@ -105,6 +124,8 @@ export class SimulationResources {
         { binding: 6, resource: { buffer: this.states } },
         { binding: 7, resource: { buffer: this.impulse } },
         { binding: 8, resource: { buffer: this.agents } },
+        { binding: 9, resource: { buffer: this.scent } },
+        { binding: 10, resource: { buffer: this.elites } },
       ],
     });
     this.compositeBindGroup = this.device.createBindGroup({
@@ -137,7 +158,28 @@ export class SimulationResources {
     this.device.queue.writeBuffer(this.counters, 0, block);
   }
 
+  /**
+   * @param {import("../core/scent.js").Scent} scent
+   */
+  uploadScent(scent) {
+    // The shader declares the uniform at its full size, so the whole block is
+    // written every time and no stale tail is ever read.
+    const block = new Float32Array(SCENT_BYTES / 4).fill(NO_SCENT);
+    block.set(scent.data);
+    this.device.queue.writeBuffer(this.scent, 0, block);
+  }
+
+  /** @param {Uint32Array} slots */
+  uploadElites(slots) {
+    const block = new Uint32Array(ELITES_BYTES / 4);
+    block.set(slots.subarray(0, block.length));
+    this.device.queue.writeBuffer(this.elites, 0, block);
+  }
+
   destroy() {
+    this.scent.destroy();
+    this.elites.destroy();
+    this.generation.destroy();
     this.particles?.destroy();
     this.states?.destroy();
     this.freeRing?.destroy();
