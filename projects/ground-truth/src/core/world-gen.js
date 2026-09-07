@@ -22,6 +22,14 @@ export const DEFAULT_WORLD_HEIGHT = 3456;
 const SURFACE_LEVEL = 0.87;
 const SURFACE_RELIEF = 0.055;
 const BEDROCK_LEVEL = 0.03;
+/**
+ * The sump: a cavern spanning the whole width of the world just above the
+ * bedrock, flooded to a level. Every shaft dug far enough breaks into it, and
+ * water is fatal, so digging down is something a lemming has to learn to
+ * stop doing. Heights are fractions of the world; `wobble` is how far the
+ * ceiling wanders either side of `height`.
+ */
+export const SUMP = { height: 0.06, water: 0.035, wobble: 0.015 };
 
 /**
  * Every feature size is a fraction of the world, never a pixel count. Fixed
@@ -86,6 +94,8 @@ export function createCaveWorld({ width, height, seed = 1 }) {
   const field = new Uint32Array(new ArrayBuffer(width * height * 4));
   const profile = surfaceProfile({ width, height, seed });
   const bedrockTop = Math.round(height * BEDROCK_LEVEL);
+  const sumpCeiling = sumpTop({ width, height });
+  const waterLine = bedrockTop + Math.round(height * SUMP.water);
 
   // Two narrow bands crossing gives worm-like tunnels; a coarser field opens
   // proper caverns; a very coarse one decides which districts are honeycombed
@@ -114,6 +124,13 @@ export function createCaveWorld({ width, height, seed = 1 }) {
         paint(field, index, MATERIALS.bedrock, index * 2654435761);
         continue;
       }
+      // The sump. Water up to the line, then nothing — placeholder, once the
+      // hollows are filled — up to a ceiling that wanders with the strata.
+      const roof = bedrockTop + Math.round(height * (SUMP.height + (sampleField(strata, x, bedrockTop) - 0.5) * 2 * SUMP.wobble));
+      if (y < roof) {
+        if (y < waterLine) paint(field, index, MATERIALS.water, index * 2654435761);
+        continue;
+      }
 
       const depth = surface - y;
       if (depth < 3) {
@@ -133,7 +150,7 @@ export function createCaveWorld({ width, height, seed = 1 }) {
       // pinching the caves shut through the entire middle of the rock.
       const reach = Math.min(
         clamp((depth - soilDepth) / (height * 0.02), 0, 1),
-        clamp((y - bedrockTop) / (height * 0.03), 0, 1),
+        clamp((y - sumpCeiling) / (height * 0.03), 0, 1),
       );
       // Some districts are honeycombed, some are near-solid.
       const porosity = reach * (0.55 + sampleField(region, x, y) * 1.15);
@@ -223,8 +240,8 @@ export function sprinkleGold(field, { width, height, seed }, profile, options = 
 export function goldNuggets({ width, height, seed }, profile, options = {}) {
   const count = options.nuggets ?? Math.max(FEWEST_NUGGETS, Math.round((width * height) / CELLS_PER_NUGGET));
   const [smallest, largest] = options.radius ?? [Math.max(2, Math.round(height * 0.0018)), Math.max(3, Math.round(height * 0.0048))];
-  const bedrockTop = Math.round(height * BEDROCK_LEVEL);
   const nuggets = [];
+  const floorOfRock = sumpTop({ width, height }) + Math.round(height * 0.02);
   for (let k = 0; k < count; k += 1) {
     const roll = (/** @type {number} */ salt) => random01((k * 2654435761 + salt * 40503) ^ seed);
     const x = Math.floor(roll(1) * width);
@@ -233,7 +250,7 @@ export function goldNuggets({ width, height, seed }, profile, options = {}) {
     // lemming left to itself will strike one now and then, while the deep ones
     // take leading a crew all the way down.
     const ceiling = Math.floor(profile[x]) - Math.round(height * 0.03);
-    const floor = bedrockTop + Math.round(height * 0.02);
+    const floor = floorOfRock;
     if (ceiling <= floor) continue;
     const shallowness = 1 - roll(2) * roll(2);
     const y = floor + Math.floor(shallowness * (ceiling - floor));
@@ -241,6 +258,17 @@ export function goldNuggets({ width, height, seed }, profile, options = {}) {
     nuggets.push({ x, y, radius });
   }
   return nuggets;
+}
+
+/**
+ * The highest the sump's ceiling reaches: the rock, and the gold, start above
+ * this.
+ *
+ * @param {{ width: number, height: number }} world
+ * @returns {number}
+ */
+export function sumpTop({ height }) {
+  return Math.round(height * BEDROCK_LEVEL) + Math.round(height * (SUMP.height + SUMP.wobble));
 }
 
 /**
@@ -345,7 +373,8 @@ export function growCaves(field, { width, height, seed }, profile) {
     for (let y = 1; y < top; y += 1) {
       const index = cellIndex(x, y, width);
       if (isOccupied(field[index])) continue;
-      const floor = isOccupied(field[index - width]);
+      // Moss grows on rock, not on the surface of the sump.
+      const floor = isOccupied(field[index - width]) && cellBond(field[index - width]) !== WATER_BOND;
       const ceiling = isOccupied(field[index + width]);
       const wall = (x > 0 && isOccupied(field[index - 1])) || (x < width - 1 && isOccupied(field[index + 1]));
       if (!floor && !ceiling && !wall) continue;

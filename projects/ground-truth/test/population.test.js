@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { BRAIN_FLOATS, TOPOLOGY_V1, layoutFor, migrateBrain, randomBrain } from "../src/core/brain.js";
+import { BRAIN_FLOATS, TOPOLOGY_V1, TOPOLOGY_V2, layoutFor, migrateBrain, randomBrain } from "../src/core/brain.js";
 import { POPULATION_VERSION, packPopulation, resizePopulation, unpackPopulation } from "../src/core/population.js";
 
 /** @param {number} count @returns {Float32Array} */
@@ -95,6 +95,15 @@ test("a version-1 population is migrated on the way in, not refused", () => {
   assert.equal(back.generation, 20);
   assert.equal(back.brains.length, 3 * BRAIN_FLOATS);
   for (let i = 0; i < 3; i += 1) {
-    assert.deepEqual(back.brains.subarray(i * BRAIN_FLOATS, (i + 1) * BRAIN_FLOATS), migrateBrain(brains.subarray(i * old, (i + 1) * old)));
+    assert.deepEqual(back.brains.subarray(i * BRAIN_FLOATS, (i + 1) * BRAIN_FLOATS), migrateBrain(brains.subarray(i * old, (i + 1) * old), TOPOLOGY_V1));
   }
+});
+
+test("a version-2 population is migrated as well", () => {
+  const old = layoutFor(TOPOLOGY_V2).floats;
+  const brains = new Float32Array(2 * old).fill(0.25);
+  const back = unpackPopulation({ version: 2, generation: 7, count: 2, brains, elites: [0], best: 1, mean: 1, savedAt: 1 });
+  assert.equal(back.brains.length, 2 * BRAIN_FLOATS);
+  assert.deepEqual(back.brains.subarray(0, BRAIN_FLOATS), migrateBrain(brains.subarray(0, old), TOPOLOGY_V2));
+  assert.throws(() => unpackPopulation({ version: 2, generation: 7, count: 2, brains: new Float32Array(5), elites: [], best: 0, mean: 0, savedAt: 0 }), /version-2 population/);
 });

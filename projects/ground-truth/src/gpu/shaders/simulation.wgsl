@@ -82,14 +82,14 @@ const AGENT_SHATTER_SPEED: f32 = 240.0;
 // A lemming's brain: topology, weight layout, senses, actions and what it is
 // scored on. All mirrored from `src/core/brain.js`, which is where they are
 // explained; the contract test keeps the two in step.
-const INPUTS: u32  = 13u;
+const INPUTS: u32  = 15u;
 const HIDDEN: u32  = 8u;
 const OUTPUTS: u32 = 4u;
 const BRAIN_W1: u32 = 0u;
-const BRAIN_B1: u32 = 104u;
-const BRAIN_W2: u32 = 112u;
-const BRAIN_B2: u32 = 144u;
-const BRAIN_FLOATS: u32 = 148u;
+const BRAIN_B1: u32 = 120u;
+const BRAIN_W2: u32 = 128u;
+const BRAIN_B2: u32 = 160u;
+const BRAIN_FLOATS: u32 = 164u;
 const INPUT_BIAS: u32        = 0u;
 const INPUT_DROP_AHEAD: u32  = 1u;
 const INPUT_AHEAD: u32       = 2u;
@@ -103,14 +103,17 @@ const INPUT_SCENT_NEAR: u32  = 9u;
 const INPUT_GOLD_AHEAD: u32  = 10u;
 const INPUT_DIGGING: u32     = 11u;
 const INPUT_HARDNESS_BELOW: u32 = 12u;
+const INPUT_GOLD_NEAR: u32   = 13u;
+const INPUT_GOLD_BELOW: u32  = 14u;
 const ACTION_WALK: u32 = 0u;
 const ACTION_DIG: u32  = 1u;
 const ACTION_TURN: u32 = 2u;
 const ACTION_DIG_DOWN: u32 = 3u;
 const GOLD_REWARD: f32     = 50.0;
 const APPROACH_REWARD: f32 = 1.0;
-const DIG_REWARD: f32      = 0.02;
-const DEATH_PENALTY: f32   = 200.0;
+const DIG_REWARD: f32      = 0.05;
+const DIG_DOWN_REWARD: f32 = 0.0;
+const DEATH_PENALTY: f32   = 500.0;
 const SCENT_RANGE: f32     = 1024.0;
 const DECISION_HOLD: u32   = 4u;
 // Nearest-ever distance to gold before a lemming has stood anywhere.
@@ -191,7 +194,7 @@ struct Agent {
   score: f32,
   // Nearest it has ever been to gold, for the approach reward.
   closest: f32,
-  brain: array<f32, 148>,
+  brain: array<f32, 164>,
 };
 
 struct Counters {
@@ -948,9 +951,12 @@ fn struck_by_debris(x: i32, y: i32) -> bool {
   return false;
 }
 
-// Whether any part of a lemming is in the water.
+// Whether any part of a lemming is in the water, or it is standing on it.
+// Water blocks, so a lemming is never *inside* it unless water flowed onto
+// it; the usual way to drown is to land on the surface, which is the row
+// underfoot.
 fn touches_water(x: i32, y: i32) -> bool {
-  for (var dy = 0; dy < AGENT_HEIGHT; dy += 1) {
+  for (var dy = -1; dy < AGENT_HEIGHT; dy += 1) {
     for (var dx = -AGENT_HALF_W; dx <= AGENT_HALF_W; dx += 1) {
       if (!in_bounds(x + dx, y + dy)) { continue; }
       if (is_water(atomicLoad(&field[cell_index(x + dx, y + dy)]))) { return true; }
@@ -1041,6 +1047,27 @@ fn lemming_ahead(x: i32, y: i32, facing: i32) -> bool {
   for (var dy = 0; dy < AGENT_HEIGHT; dy += 1) {
     if (!in_bounds(column, y + dy)) { continue; }
     if ((atomicLoad(&overlay[cell_index(column, y + dy)]) & OVERLAY_AGENT) != 0u) { return true; }
+  }
+  return false;
+}
+
+// How much of the block around a lemming is gold: two cells either side of
+// the sprite, two below and two above. This is what tells a brain it has
+// struck a nugget and should dig around rather than straight on.
+fn gold_near(x: i32, y: i32) -> f32 {
+  var gold = 0;
+  for (var dy = -2; dy < AGENT_HEIGHT + 2; dy += 1) {
+    for (var dx = -(AGENT_HALF_W + 2); dx <= AGENT_HALF_W + 2; dx += 1) {
+      if (is_gold(word_at(x + dx, y + dy))) { gold += 1; }
+    }
+  }
+  return f32(gold) / f32((AGENT_HEIGHT + 4) * (2 * AGENT_HALF_W + 5));
+}
+
+// Gold in the floor a dig-down would take out.
+fn gold_below(x: i32, y: i32) -> bool {
+  for (var dx = -(AGENT_HALF_W + 1); dx <= AGENT_HALF_W + 1; dx += 1) {
+    if (is_gold(word_at(x + dx, y - 1))) { return true; }
   }
   return false;
 }
@@ -1231,6 +1258,8 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
     inputs[INPUT_GOLD_AHEAD] = select(0.0, 1.0, is_gold(ahead) || is_gold(word_at(x + 2 * facing, y)));
     inputs[INPUT_DIGGING] = select(0.0, 1.0, mode == MODE_DIG || mode == MODE_DIG_DOWN);
     inputs[INPUT_HARDNESS_BELOW] = hardness_of(word_at(x, y - 1));
+    inputs[INPUT_GOLD_NEAR] = gold_near(x, y);
+    inputs[INPUT_GOLD_BELOW] = select(0.0, 1.0, gold_below(x, y));
     let action = think(i, &inputs);
     if (action == ACTION_TURN) {
       facing = -facing;
@@ -1272,6 +1301,8 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
     // so the shaft is one wider than the lemming. Nothing underfoot next frame
     // means it drops into what it dug, and the decision after that may dig
     // again — a shaft, a cell a decision. Bedrock stops it; `dig_cell` refuses.
+    // The sump does not: a shaft dug far enough ends in water. Rock dug this
+    // way earns nothing in itself, only what the shaft reaches.
     var dug = 0u;
     for (var dx = -(AGENT_HALF_W + 1); dx <= AGENT_HALF_W + 1; dx += 1) {
       let found = dig_cell(x + dx, y - 1);
@@ -1279,7 +1310,7 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
       if (found == DUG_GOLD) { score += GOLD_REWARD; }
     }
     atomicAdd(&counters.dug, dug);
-    score += f32(dug) * DIG_REWARD;
+    score += f32(dug) * DIG_DOWN_REWARD;
   } else {
     // Walking. Clear ahead and it walks on; a single cell in the way and it
     // steps up; anything taller and it turns round — a reflex the brain does

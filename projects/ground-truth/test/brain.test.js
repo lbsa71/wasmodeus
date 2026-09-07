@@ -14,9 +14,11 @@ import {
   HIDDEN,
   INPUTS,
   INPUT_BIAS,
+  INPUT_GOLD_BELOW,
   INPUT_HARDNESS_BELOW,
   OUTPUTS,
   TOPOLOGY_V1,
+  TOPOLOGY_V2,
   layoutFor,
   migrateBrain,
   WEIGHT_SPREAD,
@@ -36,7 +38,7 @@ test("the weight layout tiles the brain exactly, with nothing left over", () => 
   assert.equal(BRAIN_B2, BRAIN_W2 + OUTPUTS * HIDDEN);
   assert.equal(BRAIN_FLOATS, BRAIN_B2 + OUTPUTS);
   assert.equal(INPUT_BIAS, 0);
-  assert.equal(INPUT_HARDNESS_BELOW, INPUTS - 1, "every sense has a slot and the last one is the last");
+  assert.equal(INPUT_GOLD_BELOW, INPUTS - 1, "every sense has a slot and the last one is the last");
   assert.deepEqual([ACTION_WALK, ACTION_DIG, ACTION_TURN, ACTION_DIG_DOWN], [0, 1, 2, 3]);
 });
 
@@ -163,6 +165,7 @@ test("the current layout is the general one applied to the current shape", () =>
   assert.deepEqual(layoutFor({ inputs: INPUTS, hidden: HIDDEN, outputs: OUTPUTS }),
     { w1: BRAIN_W1, b1: BRAIN_B1, w2: BRAIN_W2, b2: BRAIN_B2, floats: BRAIN_FLOATS });
   assert.equal(layoutFor(TOPOLOGY_V1).floats, 131, "what the first populations were bred with");
+  assert.equal(layoutFor(TOPOLOGY_V2).floats, 148, "and the ones bred with dig-down");
 });
 
 test("a brain bred before dig-down existed behaves exactly as it did, and can now learn more", () => {
@@ -171,7 +174,7 @@ test("a brain bred before dig-down existed behaves exactly as it did, and can no
   // outputs are bit-identical to what the old brain would have produced.
   const old = new Float32Array(layoutFor(TOPOLOGY_V1).floats);
   for (let k = 0; k < old.length; k += 1) old[k] = Math.sin(k) * 0.7;
-  const migrated = migrateBrain(old);
+  const migrated = migrateBrain(old, TOPOLOGY_V1);
   assert.equal(migrated.length, BRAIN_FLOATS);
   const v1 = layoutFor(TOPOLOGY_V1);
   for (let h = 0; h < HIDDEN; h += 1) {
@@ -203,4 +206,19 @@ test("a brain bred before dig-down existed behaves exactly as it did, and can no
     assert.ok(Math.abs(outputs[o] - sum) < 1e-5, `output ${o}`);
   }
   assert.throws(() => migrateBrain(new Float32Array(10)), /weights/);
+});
+
+test("a version-2 brain migrates too: the two new senses are wired with zeros", () => {
+  const v2 = layoutFor(TOPOLOGY_V2);
+  const old = new Float32Array(v2.floats);
+  for (let k = 0; k < old.length; k += 1) old[k] = Math.cos(k);
+  const migrated = migrateBrain(old, TOPOLOGY_V2);
+  for (let h = 0; h < HIDDEN; h += 1) {
+    for (let k = 0; k < TOPOLOGY_V2.inputs; k += 1) assert.equal(migrated[BRAIN_W1 + h * INPUTS + k], old[v2.w1 + h * TOPOLOGY_V2.inputs + k]);
+    for (let k = TOPOLOGY_V2.inputs; k < INPUTS; k += 1) assert.equal(migrated[BRAIN_W1 + h * INPUTS + k], 0);
+  }
+  for (let o = 0; o < OUTPUTS; o += 1) {
+    for (let h = 0; h < HIDDEN; h += 1) assert.equal(migrated[BRAIN_W2 + o * HIDDEN + h], old[v2.w2 + o * HIDDEN + h]);
+    assert.equal(migrated[BRAIN_B2 + o], old[v2.b2 + o]);
+  }
 });

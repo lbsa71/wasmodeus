@@ -18,7 +18,8 @@ import {
   ACTION_DIG, ACTION_DIG_DOWN, ACTION_TURN, ACTION_WALK, APPROACH_REWARD, BRAIN_B1, BRAIN_B2, BRAIN_FLOATS, BRAIN_W1, BRAIN_W2,
   DEATH_PENALTY, DECISION_HOLD, GOLD_REWARD, HIDDEN, INPUTS, INPUT_ABOVE_AHEAD, INPUT_AHEAD, INPUT_BIAS,
   INPUT_DIGGING, INPUT_DROP_AHEAD, INPUT_FACING, INPUT_GOLD_AHEAD, INPUT_HARDNESS, INPUT_HARDNESS_BELOW, INPUT_SCENT_NEAR,
-  INPUT_SCENT_X, INPUT_SCENT_Y, INPUT_WATER, OUTPUTS, SCENT_RANGE, CLOSEST_UNSET, DIG_REWARD,
+  INPUT_SCENT_X, INPUT_SCENT_Y, INPUT_WATER, OUTPUTS, SCENT_RANGE, CLOSEST_UNSET, DIG_REWARD, DIG_DOWN_REWARD,
+  INPUT_GOLD_NEAR, INPUT_GOLD_BELOW,
 } from "../src/core/brain.js";
 import { MAX_SCENT_CELLS } from "../src/core/scent.js";
 import { ELITE_CAPACITY } from "../src/core/layout.js";
@@ -376,6 +377,9 @@ test("a lemming drowns on contact with water", () => {
   assert.ok(drown >= 0, "step_agents must check for water");
   assert.ok(drown < debris, "and drowning is checked before being hit by debris");
   assert.match(step, /counters\.drowned/, "drownings are counted separately");
+  // Water blocks, so a lemming is never inside it: it lands on it. The row
+  // underfoot has to count or the sump is a floor you can walk on.
+  assert.match(body("touches_water"), /for \(var dy = -1; dy < AGENT_HEIGHT; dy \+= 1\)/, "the row underfoot counts");
 });
 
 test("an impact hands over momentum rather than destroying it", () => {
@@ -697,6 +701,7 @@ test("the shader's brain has the topology and weight layout brain.js breeds for"
   }
   for (const [name, value] of [
     ["GOLD_REWARD", GOLD_REWARD], ["APPROACH_REWARD", APPROACH_REWARD], ["DIG_REWARD", DIG_REWARD],
+    ["DIG_DOWN_REWARD", DIG_DOWN_REWARD],
     ["DEATH_PENALTY", DEATH_PENALTY], ["SCENT_RANGE", SCENT_RANGE],
   ]) {
     assert.equal(shaderConst(name, "f32"), value, `${name} differs between shader and JavaScript`);
@@ -719,7 +724,7 @@ test("every sense the brain was bred on is filled in, at the slot it expects", (
   const senses = {
     INPUT_BIAS, INPUT_DROP_AHEAD, INPUT_AHEAD, INPUT_ABOVE_AHEAD, INPUT_HARDNESS, INPUT_WATER,
     INPUT_FACING, INPUT_SCENT_X, INPUT_SCENT_Y, INPUT_SCENT_NEAR, INPUT_GOLD_AHEAD, INPUT_DIGGING,
-    INPUT_HARDNESS_BELOW,
+    INPUT_HARDNESS_BELOW, INPUT_GOLD_NEAR, INPUT_GOLD_BELOW,
   };
   assert.equal(Object.keys(senses).length, INPUTS, "one constant per input");
   for (const [name, slot] of Object.entries(senses)) {
@@ -804,9 +809,22 @@ test("a lemming can dig straight down: a shaft one wider than itself, then it dr
   const shaft = step.slice(step.indexOf("if (mode == MODE_DIG_DOWN) {"), step.indexOf("} else {", step.indexOf("if (mode == MODE_DIG_DOWN) {")));
   assert.match(shaft, /for \(var dx = -\(AGENT_HALF_W \+ 1\); dx <= AGENT_HALF_W \+ 1; dx \+= 1\)/, "the floor under the sprite and a cell either side");
   assert.match(shaft, /dig_cell\(x \+ dx, y - 1\)/, "the row underfoot");
-  assert.match(shaft, /score \+= f32\(dug\) \* DIG_REWARD/);
+  assert.match(shaft, /score \+= f32\(dug\) \* DIG_DOWN_REWARD/, "rock dug downwards earns its own rate, which is nothing");
+  assert.doesNotMatch(shaft, /\* DIG_REWARD/);
   assert.match(shaft, /if \(found == DUG_GOLD\) \{ score \+= GOLD_REWARD; \}/);
   // Falling is what happens next, by the rule that already exists.
   assert.ok(step.indexOf("if (!blocked_at(x, y - 1)) {") < step.indexOf("if (mode == MODE_DIG_DOWN) {"), "nothing underfoot is checked first, every frame");
   assert.match(step, /inputs\[INPUT_HARDNESS_BELOW\] = hardness_of\(word_at\(x, y - 1\)\);/, "and it can feel how hard the floor is");
+});
+
+test("a lemming can feel gold around it and under it, which is how it knows to dig around", () => {
+  const near = body("gold_near");
+  assert.ok(near, "gold_near is missing from the shader");
+  assert.match(near, /is_gold\(word_at\(x \+ dx, y \+ dy\)\)/);
+  assert.match(near, /return f32\(gold\) \/ f32\(/, "as a fraction, so it is 0 to 1 like every other sense");
+  const below = body("gold_below");
+  assert.match(below, /is_gold\(word_at\(x \+ dx, y - 1\)\)/, "the floor a dig-down would take out");
+  const step = body("step_agents");
+  assert.match(step, /inputs\[INPUT_GOLD_NEAR\] = gold_near\(x, y\);/);
+  assert.match(step, /inputs\[INPUT_GOLD_BELOW\] = select\(0\.0, 1\.0, gold_below\(x, y\)\);/);
 });

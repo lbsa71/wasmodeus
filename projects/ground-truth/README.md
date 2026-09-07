@@ -265,7 +265,7 @@ are **evolved**. This is neuroevolution — a genetic algorithm over the weights
 not a GAN and not gradient descent — and it is why the whole thing fits inside
 the compute pass that already existed.
 
-The net is tiny: thirteen senses, eight `tanh` hidden units, four actions, 148
+The net is tiny: fifteen senses, eight `tanh` hidden units, four actions, 164
 weights. It lives *inline in the lemming's record*, after its body, so the
 forward pass, the elite clone on respawn and the once-a-generation readback all
 touch one buffer through one binding. Inference runs on the GPU in
@@ -288,6 +288,7 @@ it faces — so a brain does not have to learn the world twice over:
 | facing | −1 or 1 |
 | scent | direction to the nearest gold, ahead-positive, and how near it is |
 | gold ahead | gold in one of the two cells ahead |
+| gold near, gold below | how much of the block around it is gold, and whether the floor is — what tells it to dig *around* a nugget rather than straight through |
 | digging | whether it is digging now, so it can learn to keep at it |
 
 The **scent** is baked once at generation: a coarse grid holding the centre of
@@ -307,11 +308,21 @@ simple reason that no action did: the only way down was off a ledge.
 whole thing is for. But gold is rare, and a first generation of random brains
 would all score exactly zero with nothing to select on — so a lemming is also
 paid one point per cell for getting *nearer to gold than it has ever been*, a
-fiftieth of a point per cell dug of anything at all, and docked two hundred for
-dying. The approach term is what turns a flat landscape into a slope evolution
-can climb; the digging term is small on purpose — a few hundred a generation
-for a constant digger, about what approaching is worth and far short of one
-nugget — enough to make tunnelling a habit worth keeping, not the point.
+twentieth of a point per cell dug **ahead**, nothing at all per cell dug
+**down**, and docked five hundred for dying. The approach term is what turns a
+flat landscape into a slope evolution can climb. The digging term is small on
+purpose — a few hundred a generation for a constant tunneller, about what
+approaching is worth and far short of one nugget. Digging down earns nothing
+in itself because, paid the same as digging ahead, brains dug down to a fault:
+it is the quickest way to rack up cells, straight through nuggets and on
+towards the bottom. A shaft has to earn its keep by what it reaches.
+
+And what it reaches, if it keeps going, is **the sump**: a cavern spanning the
+whole width of the world just above the bedrock, flooded to a level. Every
+shaft dug far enough breaks into water, water is fatal, and the death penalty
+is bigger than anything a shaft earns on the way down. Digging down is
+something a brain has to learn to stop doing — which is what the gold-near and
+gold-below senses are for.
 
 **Lemmings cannot pass each other.** Another lemming ahead is a wall as tall as
 a lemming, read from the overlay's agent marks a frame stale, in the column
@@ -357,12 +368,12 @@ one, for browsers that cannot write to a folder and for passing a population
 around by hand.
 
 The file is a fixed header, a JSON block for everything human, then the raw
-weights: 148 floats a brain, so 600 lemmings is 355 KB and the full 4 096 is
-2.4 MB. A population bred before dig-down existed — twelve senses, three
-actions — is **migrated** on the way in rather than refused: every weight lands
-where it was, the new sense is wired with zeros and the new action scores
-zero, so the brains behave exactly as they did and can now learn what they
-could not. Everything that comes back — from the database, a folder or a file — is
+weights: 164 floats a brain, so 600 lemmings is 394 KB and the full 4 096 is
+2.7 MB. A population bred with an earlier body — twelve senses and three
+actions, or thirteen and four — is **migrated** on the way in rather than
+refused: every weight lands where it was, a new sense is wired with zeros and a
+new action scores zero, so the brains behave exactly as they did and can now
+learn what they could not. Everything that comes back — from the database, a folder or a file — is
 checked before it is trusted: version, shape, every weight finite, elites in
 range. What fails is dropped, not loaded.
 
@@ -553,7 +564,8 @@ hundred frames while the slower bond-driven collapse carries on behind it.
 
 6144 × 3456 cells — about twenty-one million, some six times the area of a
 1080p screen at 1:1. A rolling surface with soil, sand lenses, grass and trees;
-a tunnel-and-cavern system carved out of the rock beneath it; moss, glowcaps,
+a tunnel-and-cavern system carved out of the rock beneath it; a flooded sump
+spanning the whole width just above the bedrock; moss, glowcaps,
 mushrooms and hanging vines lining the caves; ore veins, water seams and nuggets
 of gold; and pockets of loose spoil buried in the stone that run like sand the
 moment you breach one. Every hollow below the skyline is made of the black

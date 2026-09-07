@@ -21,16 +21,21 @@ import { hashU32, random01 } from "./prng.js";
 
 // --- Topology ----------------------------------------------------------------
 
-export const INPUTS = 13;
+export const INPUTS = 15;
 export const HIDDEN = 8;
 export const OUTPUTS = 4;
 
 /**
- * The shape a population was bred with before dig-down existed: twelve senses
- * and three actions. Records of that shape are migrated, not refused — see
- * {@link migrateBrain} — so a run is not thrown away when the body grows.
+ * The shapes populations were bred with before this one, by record version.
+ * Version 1 had twelve senses and three actions; version 2 added dig-down and
+ * the hardness of the floor. Records of those shapes are migrated, not
+ * refused — see {@link migrateBrain} — so a run is not thrown away when the
+ * body grows.
  */
 export const TOPOLOGY_V1 = { inputs: 12, hidden: 8, outputs: 3 };
+export const TOPOLOGY_V2 = { inputs: 13, hidden: 8, outputs: 4 };
+/** @type {Record<number, { inputs: number, hidden: number, outputs: number }>} */
+export const OLD_TOPOLOGIES = { 1: TOPOLOGY_V1, 2: TOPOLOGY_V2 };
 
 /** Weight layout: W1 (hidden x inputs, row-major), b1, W2 (outputs x hidden), b2. */
 export const BRAIN_W1 = 0;
@@ -71,6 +76,13 @@ export const INPUT_GOLD_AHEAD = 10;
 export const INPUT_DIGGING = 11;
 /** How hard the floor under it is to dig: 0 open, up to 1 for bedrock. */
 export const INPUT_HARDNESS_BELOW = 12;
+/**
+ * How much of the block around it is gold, 0 to 1. This is what tells a brain
+ * it has struck a nugget and should dig around rather than straight on.
+ */
+export const INPUT_GOLD_NEAR = 13;
+/** Gold in the floor under it. */
+export const INPUT_GOLD_BELOW = 14;
 
 // --- Actions -----------------------------------------------------------------
 
@@ -91,14 +103,25 @@ export const GOLD_REWARD = 50;
  */
 export const APPROACH_REWARD = 1;
 /**
- * Score per cell dug, gold or not. Small on purpose: a constant digger earns a
- * few hundred over a generation, about what approaching gold is worth and far
- * short of one nugget — enough to make tunnelling a habit worth keeping, not
- * enough to make it the point.
+ * Score per cell dug *ahead*, gold or not. Small on purpose: a constant digger
+ * earns a few hundred over a generation, about what approaching gold is worth
+ * and far short of one nugget — enough to make tunnelling a habit worth
+ * keeping, not enough to make it the point.
  */
-export const DIG_REWARD = 0.02;
-/** Taken off for drowning or being smashed. */
-export const DEATH_PENALTY = 200;
+export const DIG_REWARD = 0.05;
+/**
+ * Score per cell dug *down*: nothing. Paid the same as digging ahead, brains
+ * dug down to a fault — it is the quickest way to rack up cells — straight
+ * through nuggets and on into the sump. A shaft has to earn its keep by what
+ * it reaches: the approach reward on the way, and gold when it gets there.
+ */
+export const DIG_DOWN_REWARD = 0;
+/**
+ * Taken off for drowning or being smashed. Large, because the sump at the
+ * bottom of the world is where every shaft ends up, and dying there has to
+ * cost more than the approach reward earned on the way down.
+ */
+export const DEATH_PENALTY = 500;
 /** How far, in cells, a lemming can smell gold. Approach is rewarded inside it. */
 export const SCENT_RANGE = 1024;
 /** Frames a decision is held before the brain is asked again. */
@@ -140,7 +163,7 @@ export function layoutFor({ inputs, hidden, outputs }) {
  * @param {{ inputs: number, hidden: number, outputs: number }} [shape] the old shape
  * @returns {Float32Array} the same brain in the current shape
  */
-export function migrateBrain(old, shape = TOPOLOGY_V1) {
+export function migrateBrain(old, shape = TOPOLOGY_V2) {
   if (shape.hidden !== HIDDEN || shape.inputs > INPUTS || shape.outputs > OUTPUTS) {
     throw new Error(`Cannot migrate a ${shape.inputs}x${shape.hidden}x${shape.outputs} brain into ${INPUTS}x${HIDDEN}x${OUTPUTS}.`);
   }

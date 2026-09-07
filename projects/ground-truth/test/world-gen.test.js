@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createCaveWorld, goldNuggets, settleBonds, sprinkleGold, surfaceProfile } from "../src/core/world-gen.js";
+import { SUMP, createCaveWorld, goldNuggets, settleBonds, sprinkleGold, sumpTop, surfaceProfile } from "../src/core/world-gen.js";
 import { cellIndex } from "../src/core/geometry.js";
 import { VOID_CELL, WATER_BOND, cellBond, isOccupied, isVoid, packCell, unpackCell } from "../src/core/field-format.js";
 import { neighbourSupport } from "../src/core/sand.js";
@@ -79,7 +79,7 @@ test("there are caves: open space well below the surface", () => {
   let hollow = 0;
   for (let x = 0; x < WORLD.width; x += 1) {
     const deepest = Math.floor(profile[x]) - Math.round(WORLD.height * 0.10);
-    for (let y = Math.round(WORLD.height * 0.06); y < deepest; y += 1) {
+    for (let y = sumpTop(WORLD) + Math.round(WORLD.height * 0.03); y < deepest; y += 1) {
       underground += 1;
       if (isVoid(at(x, y))) hollow += 1;
     }
@@ -292,4 +292,25 @@ test("the nugget list is what the gold was painted from", () => {
     assert.ok(y < profile[x], "below the skyline");
   }
   assert.deepEqual(goldNuggets({ ...size, seed: 4 }, profile, { nuggets: 12, radius: [1, 2] }), nuggets, "pure in its seed");
+});
+
+test("the bottom of the world is one flooded cave, and every column ends in it", () => {
+  // Dig down far enough anywhere and you break into water. Water is level, so
+  // the pool has one surface; above it the cave is placeholder up to a ceiling
+  // that wanders, and the rock and the gold start above that.
+  const bedrockTop = Math.round(WORLD.height * 0.03);
+  const waterLine = bedrockTop + Math.round(WORLD.height * SUMP.water);
+  for (let x = 0; x < WORLD.width; x += 1) {
+    assert.equal(cellBond(at(x, bedrockTop)), WATER_BOND, `no water at the bottom of column ${x}`);
+    assert.equal(cellBond(at(x, waterLine - 1)), WATER_BOND, `column ${x}'s water is below the line`);
+    // Air, or the tip of a vine hanging from the ceiling; never rock or water.
+    const onWater = (/** @type {number} */ word) => isVoid(word) || (cellBond(word) === 1 && cellBond(word) !== WATER_BOND);
+    assert.ok(onWater(at(x, waterLine)), `column ${x} has something other than air on the water`);
+    assert.ok(onWater(at(x, waterLine + 1)), `column ${x}'s cave is too low`);
+  }
+  let bare = 0;
+  for (let x = 0; x < WORLD.width; x += 1) if (!isVoid(at(x, sumpTop(WORLD) - 1)) && cellBond(at(x, sumpTop(WORLD) - 1)) !== WATER_BOND) bare += 1;
+  assert.ok(bare > 0, "the ceiling never wanders: it is a ruled line");
+  const nuggets = goldNuggets({ ...WORLD, seed: 5 }, surfaceProfile({ ...WORLD, seed: 5 }));
+  for (const { y } of nuggets) assert.ok(y > sumpTop(WORLD), "gold starts above the sump");
 });
