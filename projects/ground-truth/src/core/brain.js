@@ -79,6 +79,13 @@ export const GOLD_REWARD = 50;
  * on; a brain that got nearer than it had ever been is rewarded for it.
  */
 export const APPROACH_REWARD = 1;
+/**
+ * Score per cell dug, gold or not. Small on purpose: a constant digger earns a
+ * few hundred over a generation, about what approaching gold is worth and far
+ * short of one nugget — enough to make tunnelling a habit worth keeping, not
+ * enough to make it the point.
+ */
+export const DIG_REWARD = 0.02;
 /** Taken off for drowning or being smashed. */
 export const DEATH_PENALTY = 200;
 /** How far, in cells, a lemming can smell gold. Approach is rewarded inside it. */

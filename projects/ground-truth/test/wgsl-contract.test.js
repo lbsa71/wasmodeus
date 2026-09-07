@@ -18,7 +18,7 @@ import {
   ACTION_DIG, ACTION_TURN, ACTION_WALK, APPROACH_REWARD, BRAIN_B1, BRAIN_B2, BRAIN_FLOATS, BRAIN_W1, BRAIN_W2,
   DEATH_PENALTY, DECISION_HOLD, GOLD_REWARD, HIDDEN, INPUTS, INPUT_ABOVE_AHEAD, INPUT_AHEAD, INPUT_BIAS,
   INPUT_DIGGING, INPUT_DROP_AHEAD, INPUT_FACING, INPUT_GOLD_AHEAD, INPUT_HARDNESS, INPUT_SCENT_NEAR,
-  INPUT_SCENT_X, INPUT_SCENT_Y, INPUT_WATER, OUTPUTS, SCENT_RANGE, CLOSEST_UNSET,
+  INPUT_SCENT_X, INPUT_SCENT_Y, INPUT_WATER, OUTPUTS, SCENT_RANGE, CLOSEST_UNSET, DIG_REWARD,
 } from "../src/core/brain.js";
 import { MAX_SCENT_CELLS } from "../src/core/scent.js";
 import { ELITE_CAPACITY } from "../src/core/layout.js";
@@ -696,7 +696,7 @@ test("the shader's brain has the topology and weight layout brain.js breeds for"
     assert.equal(shaderConst(name, "u32"), value, `${name} differs between shader and JavaScript`);
   }
   for (const [name, value] of [
-    ["GOLD_REWARD", GOLD_REWARD], ["APPROACH_REWARD", APPROACH_REWARD],
+    ["GOLD_REWARD", GOLD_REWARD], ["APPROACH_REWARD", APPROACH_REWARD], ["DIG_REWARD", DIG_REWARD],
     ["DEATH_PENALTY", DEATH_PENALTY], ["SCENT_RANGE", SCENT_RANGE],
   ]) {
     assert.equal(shaderConst(name, "f32"), value, `${name} differs between shader and JavaScript`);
@@ -759,6 +759,7 @@ test("what a lemming is scored on", () => {
   assert.match(step, /if \(closest < 0\.0\) \{\s*closest = min\(dist, SCENT_RANGE\);\s*\} else if/,
     "the first standing frame only measures");
   assert.match(step, /if \(found == DUG_GOLD\) \{ score \+= GOLD_REWARD; \}/, "digging through gold");
+  assert.match(step, /score \+= f32\(dug\) \* DIG_REWARD/, "and a little for digging at all");
   assert.match(body("die"), /score - DEATH_PENALTY/, "and dying costs");
   const drown = step.indexOf("counters.drowned");
   assert.ok(step.indexOf("die(i, score)", drown) > drown, "drowning is a death");
@@ -776,4 +777,23 @@ test("the scent and the elite list are uniforms, which is what keeps the storage
 
 test("the bomb is gone", () => {
   assert.doesNotMatch(simulation, /MODE_FUSE|agent_bomb|agent_blast|release_cell/);
+});
+
+test("lemmings cannot pass each other", () => {
+  // Another lemming ahead is a wall the height of a lemming: read from the
+  // overlay's agent marks, a frame stale, just beyond this one's own sprite so
+  // it never trips over itself.
+  const ahead = body("lemming_ahead");
+  assert.ok(ahead, "lemming_ahead is missing from the shader");
+  assert.match(ahead, /OVERLAY_AGENT/);
+  assert.match(ahead, /x \+ facing \* \(AGENT_HALF_W \+ 1\)/, "the column just past its own edge");
+  assert.match(ahead, /for \(var dy = 0; dy < AGENT_HEIGHT; dy \+= 1\)/, "at every row it spans");
+  const step = body("step_agents");
+  assert.match(step, /let other = lemming_ahead\(x, y, facing\);/);
+  assert.match(step, /inputs\[INPUT_AHEAD\] = select\(0\.0, 1\.0, blocked_at\(x \+ facing, y\) \|\| other\);/, "the brain feels it as a wall");
+  assert.match(step, /inputs\[INPUT_ABOVE_AHEAD\] = select\(0\.0, 1\.0, blocked_at\(x \+ facing, y \+ 1\) \|\| other\);/);
+  // Walking into one turns the walker round, like a wall too tall to climb;
+  // a digger stops at it rather than walking through.
+  assert.match(step, /if \(other\) \{\s*facing = -facing;\s*\} else if \(!ahead\)/, "the walk reflex");
+  assert.match(step, /if \(!blocked_at\(x \+ facing, y\) && !other\)/, "and the dig advance");
 });

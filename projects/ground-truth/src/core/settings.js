@@ -25,7 +25,10 @@ import { RUBBLE_BOND } from "./palette.js";
  *   blastStrength: number,
  *   smudgeStrength: number,
  *   agents: { count: number, speed: number },
- *   evolution: { generationFrames: number, eliteFraction: number, mutationRate: number, mutationStrength: number },
+ *   evolution: {
+ *     generationFrames: number, eliteFraction: number, mutationRate: number, mutationStrength: number,
+ *     snapshotEvery: number
+ *   },
  *   waterSpread: number
  * }} Settings
  */
@@ -73,7 +76,9 @@ export function defaultSettings() {
     // How brains breed. A generation is twenty seconds; the top tenth keep
     // their weights and everyone else is a mutated cross of two of them. See
     // `src/core/brain.js`.
-    evolution: { generationFrames: 1200, eliteFraction: 0.1, mutationRate: 0.1, mutationStrength: 0.5 },
+    // `snapshotEvery`: besides `latest.pop`, keep a numbered file every this
+    // many generations when saving to a folder.
+    evolution: { generationFrames: 1200, eliteFraction: 0.1, mutationRate: 0.1, mutationStrength: 0.5, snapshotEvery: 50 },
     // How briskly water creeps sideways. Water is released every frame it has
     // anywhere to go, so this only has to be enough to carry a drop into the
     // next cell; a real shove would make it arc away like grit.

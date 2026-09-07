@@ -106,6 +106,7 @@ const ACTION_DIG: u32  = 1u;
 const ACTION_TURN: u32 = 2u;
 const GOLD_REWARD: f32     = 50.0;
 const APPROACH_REWARD: f32 = 1.0;
+const DIG_REWARD: f32      = 0.02;
 const DEATH_PENALTY: f32   = 200.0;
 const SCENT_RANGE: f32     = 1024.0;
 const DECISION_HOLD: u32   = 4u;
@@ -1028,6 +1029,19 @@ fn water_near(x: i32, y: i32, facing: i32) -> bool {
   return false;
 }
 
+// Whether another lemming stands in the way. Lemmings cannot pass each other:
+// the overlay's agent marks — a frame stale, like everything a lemming reads
+// from it — are looked for in the column just past this one's own sprite, at
+// every row it spans, so it never trips over itself.
+fn lemming_ahead(x: i32, y: i32, facing: i32) -> bool {
+  let column = x + facing * (AGENT_HALF_W + 1);
+  for (var dy = 0; dy < AGENT_HEIGHT; dy += 1) {
+    if (!in_bounds(column, y + dy)) { continue; }
+    if ((atomicLoad(&overlay[cell_index(column, y + dy)]) & OVERLAY_AGENT) != 0u) { return true; }
+  }
+  return false;
+}
+
 // The nearest nugget to a position, from the grid baked at generation. The grid
 // only decides *which* nugget is nearest; the vector to it is taken from the
 // lemming's true position. See `src/core/scent.js`.
@@ -1193,6 +1207,9 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
     closest = dist;
   }
 
+  // Another lemming in the way is a wall as tall as a lemming.
+  let other = lemming_ahead(x, y, facing);
+
   if (timer <= 1u) {
     // Ask the brain. Everything is in the lemming's own frame — ahead is the
     // way it faces — so it need not learn the world twice over.
@@ -1200,8 +1217,8 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
     var inputs: array<f32, INPUTS>;
     inputs[INPUT_BIAS] = 1.0;
     inputs[INPUT_DROP_AHEAD] = select(0.0, 1.0, !blocked_at(x + facing, y - 1));
-    inputs[INPUT_AHEAD] = select(0.0, 1.0, blocked_at(x + facing, y));
-    inputs[INPUT_ABOVE_AHEAD] = select(0.0, 1.0, blocked_at(x + facing, y + 1));
+    inputs[INPUT_AHEAD] = select(0.0, 1.0, blocked_at(x + facing, y) || other);
+    inputs[INPUT_ABOVE_AHEAD] = select(0.0, 1.0, blocked_at(x + facing, y + 1) || other);
     inputs[INPUT_HARDNESS] = hardness_of(ahead);
     inputs[INPUT_WATER] = select(0.0, 1.0, water_near(x, y, facing));
     inputs[INPUT_FACING] = f32(facing);
@@ -1238,8 +1255,9 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
       }
     }
     atomicAdd(&counters.dug, dug);
-    // Digging is slower going than walking.
-    if (!blocked_at(x + facing, y)) {
+    score += f32(dug) * DIG_REWARD;
+    // Digging is slower going than walking, and stops at another lemming.
+    if (!blocked_at(x + facing, y) && !other) {
       pos_x = clamp(pos_x + f32(facing) * params.agent_speed * params.frame_seconds * 0.5,
         0.0, f32(params.world.x) - EDGE_EPSILON);
     }
@@ -1248,7 +1266,9 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
     // steps up; anything taller and it turns round — a reflex the brain does
     // not have to learn, though it may turn of its own accord as well.
     let ahead = blocked_at(x + facing, y);
-    if (!ahead) {
+    if (other) {
+      facing = -facing;
+    } else if (!ahead) {
       pos_x = clamp(pos_x + f32(facing) * params.agent_speed * params.frame_seconds,
         0.0, f32(params.world.x) - EDGE_EPSILON);
     } else if (!blocked_at(x + facing, y + 1)) {

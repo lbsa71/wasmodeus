@@ -81,3 +81,10 @@ test("a countdown reaches zero and fires exactly once", () => {
   assert.equal(timer, 0);
 });
 
+
+test("another lemming ahead is a wall a lemming cannot pass, so it turns", () => {
+  // The shader feeds a lemming ahead as both "ahead" and "above ahead" solid:
+  // too tall to step over, so the reflex turns it round rather than letting it
+  // walk through. Two meeting head-on both turn and walk apart.
+  assert.deepEqual(walkDecision({ ground: true, ahead: true, aboveAhead: true }, 1), { action: "turn", facing: -1 });
+});

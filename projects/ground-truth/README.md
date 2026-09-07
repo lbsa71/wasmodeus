@@ -302,9 +302,18 @@ four frames, then asked again.
 **What it is scored on.** Fifty per cell of gold dug through, which is what the
 whole thing is for. But gold is rare, and a first generation of random brains
 would all score exactly zero with nothing to select on — so a lemming is also
-paid one point per cell for getting *nearer to gold than it has ever been*, and
-docked two hundred for dying. That approach term is what turns a flat landscape
-into a slope evolution can climb.
+paid one point per cell for getting *nearer to gold than it has ever been*, a
+fiftieth of a point per cell dug of anything at all, and docked two hundred for
+dying. The approach term is what turns a flat landscape into a slope evolution
+can climb; the digging term is small on purpose — a few hundred a generation
+for a constant digger, about what approaching is worth and far short of one
+nugget — enough to make tunnelling a habit worth keeping, not the point.
+
+**Lemmings cannot pass each other.** Another lemming ahead is a wall as tall as
+a lemming, read from the overlay's agent marks a frame stale, in the column
+just past this one's own sprite so it never trips over itself. The brain feels
+it as a wall; a walker's reflex turns it round, so two meeting head-on both turn
+and walk apart, and a digger stops at it rather than walking through.
 
 **How they breed.** A generation is twenty seconds. At the end of it every
 record — score and brain — is read back, 2 MB, the top tenth keep their slots
@@ -319,16 +328,39 @@ named. The elite keep their slots precisely so that list stays valid until the
 next generation.
 
 Diggers are drawn orange and walkers green, so you can watch what each brain
-decided.
+decided, and the line under the gold count shows the generation, how far
+through it is, the best score bred from, and the frame count.
+
+### Saving, sharing and committing brains
 
 **The population is saved after every generation** — every brain, who the
-elite are, and the generation count — to IndexedDB, and picked up again on the
-next visit, so a reload does not throw away twenty minutes of evolution. Reset,
-New world and the lemmings slider all keep the brains too: more lemmings than
-brains and the newcomers are mutated copies of what was learned, fewer and the
-rest are dropped. **Forget brains** starts over from generation 0. A saved
-record is checked before it is trusted — version, shape, every weight finite —
-and dropped if it fails.
+elite are, and the generation count — in two places:
+
+- **This browser's database**, always, so a reload does not throw away twenty
+  minutes of evolution.
+- **A folder on disk**, once you have chosen one with *Save to folder…*. Point
+  it at `public/populations` and the repository's copy keeps itself current:
+  `latest.pop` is rewritten every generation and a numbered `gen-00050.pop`
+  kept every fifty, so a good run can be committed and shared. The browser
+  remembers the folder but not, across a reload, the permission to write to
+  it — that takes one more click, which is what *Resume saving* is.
+
+On start the app takes whichever has come further: the browser's own progress
+or `public/populations/latest.pop`, the population **shipped with the
+repository**. Pull the repo and you start from wherever that had got to.
+*Export* downloads the current population as a `.pop` file and *Import* loads
+one, for browsers that cannot write to a folder and for passing a population
+around by hand.
+
+The file is a fixed header, a JSON block for everything human, then the raw
+weights: 131 floats a brain, so 600 lemmings is 314 KB and the full 4 096 is
+2 MB. Everything that comes back — from the database, a folder or a file — is
+checked before it is trusted: version, shape, every weight finite, elites in
+range. What fails is dropped, not loaded.
+
+Reset, New world and the lemmings slider all keep the brains: more lemmings
+than brains and the newcomers are mutated copies of what was learned, fewer and
+the rest are dropped. **Forget brains** starts over from generation 0.
 
 **Measured**, with generations shortened to 400 frames so several fit a run:
 mean score 17 → 18 → 30 → 26 over four generations, best 106 → 135, with 394
@@ -605,7 +637,8 @@ Requires a browser with WebGPU.
 | `src/gpu/` | Device acquisition, pipelines, buffer ownership, non-blocking readback. |
 | `src/gpu/shaders/` | `simulation.wgsl` (ten compute entry points) and `composite.wgsl`. |
 | `src/worker/` | World generation, off the main thread. |
-| `src/storage/` | Where the population is kept between visits. |
+| `src/storage/` | Where the population is kept between visits: the browser's database, and a folder on disk. |
+| `public/populations/` | The population shipped with the repository. Save to this folder and it keeps itself current. |
 | `src/ui/` | Debug-panel formatting and the frame-rate meter. |
 | `test/` | `node --test` suites, including a contract test that fails if the shader and the JavaScript memory layouts drift apart. |
 

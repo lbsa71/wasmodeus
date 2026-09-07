@@ -10,6 +10,8 @@
 const DATABASE = "ground-truth";
 const STORE = "population";
 const KEY = "latest";
+/** The folder on disk populations are also written to, once one is chosen. */
+const FOLDER_KEY = "folder";
 
 /**
  * @template T
@@ -63,5 +65,19 @@ export class PopulationStore {
 
   async clear() {
     await settle((await this.#store("readwrite")).delete(KEY));
+  }
+
+  /** @returns {Promise<FileSystemDirectoryHandle|undefined>} */
+  async loadHandle() {
+    return /** @type {FileSystemDirectoryHandle|undefined} */ (await settle((await this.#store("readonly")).get(FOLDER_KEY)));
+  }
+
+  /** @param {FileSystemDirectoryHandle} handle */
+  async saveHandle(handle) {
+    await settle((await this.#store("readwrite")).put(handle, FOLDER_KEY));
+  }
+
+  async clearHandle() {
+    await settle((await this.#store("readwrite")).delete(FOLDER_KEY));
   }
 }

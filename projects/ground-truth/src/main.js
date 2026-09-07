@@ -11,10 +11,15 @@ import { MAX_REST_THRESHOLD, MIN_REST_THRESHOLD } from "./core/rest.js";
 import { AGENT_CAPACITY } from "./core/layout.js";
 import { FrameRateMeter, debugRows } from "./ui/debug-panel.js";
 import { packPopulation, unpackPopulation } from "./core/population.js";
+import {
+  LATEST_POPULATION_FILE, decodePopulationFile, encodePopulationFile, populationFileName,
+} from "./core/population-file.js";
 import { PopulationStore } from "./storage/population-store.js";
+import { PopulationFolder, downloadFile } from "./storage/population-folder.js";
 
 const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector("#world"));
 const store = new PopulationStore();
+const folder = new PopulationFolder(store);
 const statusLine = /** @type {HTMLParagraphElement} */ (document.querySelector("#status"));
 const debugList = /** @type {HTMLDListElement} */ (document.querySelector("#debug-rows"));
 const goldValue = /** @type {HTMLSpanElement} */ (document.querySelector("#gold-value"));
@@ -35,6 +40,9 @@ const pauseButton = /** @type {HTMLButtonElement} */ (document.querySelector("#p
 const resetButton = /** @type {HTMLButtonElement} */ (document.querySelector("#reset"));
 const reseedButton = /** @type {HTMLButtonElement} */ (document.querySelector("#reseed"));
 const forgetButton = /** @type {HTMLButtonElement} */ (document.querySelector("#forget"));
+const folderButton = /** @type {HTMLButtonElement} */ (document.querySelector("#folder"));
+const exportButton = /** @type {HTMLButtonElement} */ (document.querySelector("#export"));
+const importInput = /** @type {HTMLInputElement} */ (document.querySelector("#import"));
 
 const resizeCanvas = () => {
   const ratio = Math.min(window.devicePixelRatio, 2);
@@ -142,6 +150,72 @@ try {
     store.clear().catch(() => {});
     statusLine.textContent = "Brains forgotten: evolution starts over from generation 0";
   });
+
+  // The population as a file: written to a folder on disk after every
+  // generation once one is chosen — point it at `public/populations` and the
+  // repository's copy keeps itself current — or exported and imported by hand.
+  const currentPopulation = () => {
+    if (!engine.population) return null;
+    return packPopulation({
+      generation: engine.evolution.generation,
+      count: engine.settings.agents.count,
+      brains: engine.population.brains,
+      elites: engine.population.elites,
+      best: engine.evolution.best,
+      mean: engine.evolution.mean,
+    });
+  };
+  const labelFolder = () => {
+    if (!PopulationFolder.supported) {
+      folderButton.disabled = true;
+      folderButton.title = "This browser cannot write to a folder; use Export instead";
+      folderButton.textContent = "Save to folder…";
+    } else if (folder.writable) {
+      folderButton.textContent = `Saving to ${folder.name}`;
+    } else if (folder.name) {
+      folderButton.textContent = `Resume saving to ${folder.name}`;
+    } else {
+      folderButton.textContent = "Save to folder…";
+    }
+  };
+  folderButton.addEventListener("click", async () => {
+    try {
+      if (folder.writable) {
+        await folder.forget();
+        statusLine.textContent = "No longer saving to a folder";
+      } else if (folder.name) {
+        if (!(await folder.resume())) statusLine.textContent = "Permission to write to the folder was not given";
+      } else {
+        const name = await folder.pick();
+        statusLine.textContent = `Every generation will be written to ${name}/${LATEST_POPULATION_FILE}`;
+      }
+      const population = currentPopulation();
+      if (folder.writable && population) await folder.write(LATEST_POPULATION_FILE, encodePopulationFile(population));
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        statusLine.textContent = `Folder: ${error instanceof Error ? error.message : error}`;
+      }
+    }
+    labelFolder();
+  });
+  exportButton.addEventListener("click", () => {
+    const population = currentPopulation();
+    if (!population) return;
+    downloadFile(populationFileName(population.generation), encodePopulationFile(population));
+  });
+  importInput.addEventListener("change", async () => {
+    const file = importInput.files?.[0];
+    importInput.value = "";
+    if (!file) return;
+    try {
+      const saved = decodePopulationFile(await file.arrayBuffer());
+      engine.adoptPopulation(saved);
+      await store.save(saved);
+      statusLine.textContent = `Imported generation ${saved.generation} (${saved.count} brains) from ${file.name}`;
+    } catch (error) {
+      statusLine.textContent = `Could not import ${file.name}: ${error instanceof Error ? error.message : error}`;
+    }
+  });
   reseedButton.addEventListener("click", async () => {
     reseedButton.disabled = true;
     engine.settings.seed += 1;
@@ -205,7 +279,10 @@ try {
 
   const renderDebug = (/** @type {number} */ fps) => {
     goldValue.textContent = engine.stats.gold.toLocaleString();
-    generationValue.textContent = `gen ${engine.evolution.generation} · best ${Math.round(engine.evolution.best).toLocaleString()}`;
+    generationValue.textContent = `gen ${engine.evolution.generation}`
+      + ` · frame ${engine.evolution.frame}/${engine.evolution.frames}`
+      + ` · best ${Math.round(engine.evolution.best).toLocaleString()}`
+      + ` · ${engine.frame.toLocaleString()} frames`;
     const rows = debugRows(engine.stats, {
       fps,
       frame: engine.frame,
@@ -239,22 +316,48 @@ try {
   // bred, and the last one saved is picked up here. A record that cannot be
   // trusted is dropped rather than loaded.
   engine.onGeneration = (population) => {
-    store.save(packPopulation(population)).catch((error) => {
+    const saved = packPopulation(population);
+    store.save(saved).catch((error) => {
       statusLine.textContent = `Could not save the population: ${error instanceof Error ? error.message : error}`;
     });
+    if (folder.writable) {
+      const bytes = encodePopulationFile(saved);
+      const writes = [folder.write(LATEST_POPULATION_FILE, bytes)];
+      const every = engine.settings.evolution.snapshotEvery;
+      if (every > 0 && saved.generation % every === 0) writes.push(folder.write(populationFileName(saved.generation), bytes));
+      Promise.all(writes).catch((error) => {
+        statusLine.textContent = `Could not write to ${folder.name}: ${error instanceof Error ? error.message : error}`;
+        labelFolder();
+      });
+    }
   };
+
+  // Where to start from: this browser's own progress, or the population
+  // shipped with the repository — whichever has come further.
+  /** @type {{ saved: import("./core/population.js").SavedPopulation, from: string }[]} */
+  const candidates = [];
   try {
     const record = await store.load();
-    if (record) {
-      const saved = unpackPopulation(record);
-      engine.adoptPopulation(saved);
-      const age = Math.round((Date.now() - saved.savedAt) / 60_000);
-      statusLine.textContent = `Picked up generation ${saved.generation} (${saved.count} brains, saved ${age} min ago)`;
-    }
+    if (record) candidates.push({ saved: unpackPopulation(record), from: "this browser" });
   } catch (error) {
     statusLine.textContent = `Saved population dropped: ${error instanceof Error ? error.message : error}`;
     store.clear().catch(() => {});
   }
+  try {
+    const response = await fetch(`./populations/${LATEST_POPULATION_FILE}`, { cache: "no-cache" });
+    if (response.ok) candidates.push({ saved: decodePopulationFile(await response.arrayBuffer()), from: `populations/${LATEST_POPULATION_FILE}` });
+  } catch {
+    // No shipped population, or not one this build understands: start fresh.
+  }
+  candidates.sort((a, b) => b.saved.generation - a.saved.generation);
+  if (candidates.length > 0) {
+    const { saved, from } = candidates[0];
+    engine.adoptPopulation(saved);
+    const age = Math.round((Date.now() - saved.savedAt) / 60_000);
+    statusLine.textContent = `Picked up generation ${saved.generation} (${saved.count} brains, saved ${age} min ago) from ${from}`;
+  }
+  if (PopulationFolder.supported) await folder.restore().catch(() => false);
+  labelFolder();
 } catch (error) {
   statusLine.textContent = error instanceof Error ? error.message : `${error}`;
   statusLine.classList.add("error");
