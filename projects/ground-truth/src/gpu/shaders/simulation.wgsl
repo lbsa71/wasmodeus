@@ -68,6 +68,7 @@ const BLAST_RIM: f32 = 0.25;
 // Lemmings. See `src/core/agents.js` for the rules these mirror.
 const MODE_WALK: u32 = 0u;
 const MODE_DIG: u32  = 1u;
+const MODE_DIG_DOWN: u32 = 2u;
 const AGENT_TIMER_MASK: u32 = 0x000000ffu;
 const AGENT_FACING_BIT: u32 = 0x00000100u;
 const AGENT_MODE_SHIFT: u32 = 9u;
@@ -81,14 +82,14 @@ const AGENT_SHATTER_SPEED: f32 = 240.0;
 // A lemming's brain: topology, weight layout, senses, actions and what it is
 // scored on. All mirrored from `src/core/brain.js`, which is where they are
 // explained; the contract test keeps the two in step.
-const INPUTS: u32  = 12u;
+const INPUTS: u32  = 13u;
 const HIDDEN: u32  = 8u;
-const OUTPUTS: u32 = 3u;
+const OUTPUTS: u32 = 4u;
 const BRAIN_W1: u32 = 0u;
-const BRAIN_B1: u32 = 96u;
-const BRAIN_W2: u32 = 104u;
-const BRAIN_B2: u32 = 128u;
-const BRAIN_FLOATS: u32 = 131u;
+const BRAIN_B1: u32 = 104u;
+const BRAIN_W2: u32 = 112u;
+const BRAIN_B2: u32 = 144u;
+const BRAIN_FLOATS: u32 = 148u;
 const INPUT_BIAS: u32        = 0u;
 const INPUT_DROP_AHEAD: u32  = 1u;
 const INPUT_AHEAD: u32       = 2u;
@@ -101,9 +102,11 @@ const INPUT_SCENT_Y: u32     = 8u;
 const INPUT_SCENT_NEAR: u32  = 9u;
 const INPUT_GOLD_AHEAD: u32  = 10u;
 const INPUT_DIGGING: u32     = 11u;
+const INPUT_HARDNESS_BELOW: u32 = 12u;
 const ACTION_WALK: u32 = 0u;
 const ACTION_DIG: u32  = 1u;
 const ACTION_TURN: u32 = 2u;
+const ACTION_DIG_DOWN: u32 = 3u;
 const GOLD_REWARD: f32     = 50.0;
 const APPROACH_REWARD: f32 = 1.0;
 const DIG_REWARD: f32      = 0.02;
@@ -188,7 +191,7 @@ struct Agent {
   score: f32,
   // Nearest it has ever been to gold, for the approach reward.
   closest: f32,
-  brain: array<f32, 131>,
+  brain: array<f32, 148>,
 };
 
 struct Counters {
@@ -1226,13 +1229,16 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
     inputs[INPUT_SCENT_Y] = select(0.0, toward.y / max(dist, 1.0), smells);
     inputs[INPUT_SCENT_NEAR] = select(0.0, 1.0 - dist / SCENT_RANGE, smells);
     inputs[INPUT_GOLD_AHEAD] = select(0.0, 1.0, is_gold(ahead) || is_gold(word_at(x + 2 * facing, y)));
-    inputs[INPUT_DIGGING] = select(0.0, 1.0, mode == MODE_DIG);
+    inputs[INPUT_DIGGING] = select(0.0, 1.0, mode == MODE_DIG || mode == MODE_DIG_DOWN);
+    inputs[INPUT_HARDNESS_BELOW] = hardness_of(word_at(x, y - 1));
     let action = think(i, &inputs);
     if (action == ACTION_TURN) {
       facing = -facing;
       mode = MODE_WALK;
     } else if (action == ACTION_DIG) {
       mode = MODE_DIG;
+    } else if (action == ACTION_DIG_DOWN) {
+      mode = MODE_DIG_DOWN;
     } else {
       mode = MODE_WALK;
     }
@@ -1261,6 +1267,19 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
       pos_x = clamp(pos_x + f32(facing) * params.agent_speed * params.frame_seconds * 0.5,
         0.0, f32(params.world.x) - EDGE_EPSILON);
     }
+  } else if (mode == MODE_DIG_DOWN) {
+    // Digging down: the floor under the whole sprite and a cell either side,
+    // so the shaft is one wider than the lemming. Nothing underfoot next frame
+    // means it drops into what it dug, and the decision after that may dig
+    // again — a shaft, a cell a decision. Bedrock stops it; `dig_cell` refuses.
+    var dug = 0u;
+    for (var dx = -(AGENT_HALF_W + 1); dx <= AGENT_HALF_W + 1; dx += 1) {
+      let found = dig_cell(x + dx, y - 1);
+      if (found != DUG_NOTHING) { dug += 1u; }
+      if (found == DUG_GOLD) { score += GOLD_REWARD; }
+    }
+    atomicAdd(&counters.dug, dug);
+    score += f32(dug) * DIG_REWARD;
   } else {
     // Walking. Clear ahead and it walks on; a single cell in the way and it
     // steps up; anything taller and it turns round — a reflex the brain does
@@ -1300,7 +1319,8 @@ fn draw_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
   let state = agents[i].state;
   if ((state & AGENT_ALIVE_BIT) == 0u) { return; }
   var colour = 0x00e8d0u;
-  if (((state & AGENT_MODE_MASK) >> AGENT_MODE_SHIFT) == MODE_DIG) { colour = 0x2090ffu; }
+  let mode = (state & AGENT_MODE_MASK) >> AGENT_MODE_SHIFT;
+  if (mode == MODE_DIG || mode == MODE_DIG_DOWN) { colour = 0x2090ffu; }
   let x = i32(floor(agents[i].pos_x));
   let y = i32(floor(agents[i].pos_y));
   for (var dy = 0; dy < AGENT_HEIGHT; dy += 1) {

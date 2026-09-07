@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   ACTION_DIG,
+  ACTION_DIG_DOWN,
   ACTION_TURN,
   ACTION_WALK,
   BRAIN_B1,
@@ -13,8 +14,11 @@ import {
   HIDDEN,
   INPUTS,
   INPUT_BIAS,
-  INPUT_DIGGING,
+  INPUT_HARDNESS_BELOW,
   OUTPUTS,
+  TOPOLOGY_V1,
+  layoutFor,
+  migrateBrain,
   WEIGHT_SPREAD,
   crossover,
   decide,
@@ -32,8 +36,8 @@ test("the weight layout tiles the brain exactly, with nothing left over", () => 
   assert.equal(BRAIN_B2, BRAIN_W2 + OUTPUTS * HIDDEN);
   assert.equal(BRAIN_FLOATS, BRAIN_B2 + OUTPUTS);
   assert.equal(INPUT_BIAS, 0);
-  assert.equal(INPUT_DIGGING, INPUTS - 1, "every sense has a slot and the last one is the last");
-  assert.deepEqual([ACTION_WALK, ACTION_DIG, ACTION_TURN], [0, 1, 2]);
+  assert.equal(INPUT_HARDNESS_BELOW, INPUTS - 1, "every sense has a slot and the last one is the last");
+  assert.deepEqual([ACTION_WALK, ACTION_DIG, ACTION_TURN, ACTION_DIG_DOWN], [0, 1, 2, 3]);
 });
 
 test("a forward pass is what the arithmetic says it is", () => {
@@ -153,4 +157,50 @@ test("at least one elite survives however small the fraction", () => {
 
 test("a brains array of the wrong size is an error, not a silent misread", () => {
   assert.throws(() => nextGeneration(new Float32Array(5), [1, 2], 1, { eliteFraction: 0.5, mutationRate: 0, mutationStrength: 0 }), /Expected/);
+});
+
+test("the current layout is the general one applied to the current shape", () => {
+  assert.deepEqual(layoutFor({ inputs: INPUTS, hidden: HIDDEN, outputs: OUTPUTS }),
+    { w1: BRAIN_W1, b1: BRAIN_B1, w2: BRAIN_W2, b2: BRAIN_B2, floats: BRAIN_FLOATS });
+  assert.equal(layoutFor(TOPOLOGY_V1).floats, 131, "what the first populations were bred with");
+});
+
+test("a brain bred before dig-down existed behaves exactly as it did, and can now learn more", () => {
+  // Every old weight lands where it was; the new sense is wired with zeros and
+  // the new action scores zero. On the twelve old senses the three old
+  // outputs are bit-identical to what the old brain would have produced.
+  const old = new Float32Array(layoutFor(TOPOLOGY_V1).floats);
+  for (let k = 0; k < old.length; k += 1) old[k] = Math.sin(k) * 0.7;
+  const migrated = migrateBrain(old);
+  assert.equal(migrated.length, BRAIN_FLOATS);
+  const v1 = layoutFor(TOPOLOGY_V1);
+  for (let h = 0; h < HIDDEN; h += 1) {
+    for (let k = 0; k < TOPOLOGY_V1.inputs; k += 1) {
+      assert.equal(migrated[BRAIN_W1 + h * INPUTS + k], old[v1.w1 + h * TOPOLOGY_V1.inputs + k], `W1[${h}][${k}]`);
+    }
+    assert.equal(migrated[BRAIN_W1 + h * INPUTS + INPUT_HARDNESS_BELOW], 0, "the new sense changes nothing yet");
+    assert.equal(migrated[BRAIN_B1 + h], old[v1.b1 + h]);
+  }
+  for (let o = 0; o < TOPOLOGY_V1.outputs; o += 1) {
+    for (let h = 0; h < HIDDEN; h += 1) assert.equal(migrated[BRAIN_W2 + o * HIDDEN + h], old[v1.w2 + o * HIDDEN + h]);
+    assert.equal(migrated[BRAIN_B2 + o], old[v1.b2 + o]);
+  }
+  for (let h = 0; h < HIDDEN; h += 1) assert.equal(migrated[BRAIN_W2 + ACTION_DIG_DOWN * HIDDEN + h], 0);
+  assert.equal(migrated[BRAIN_B2 + ACTION_DIG_DOWN], 0, "the new action scores nothing until mutation finds it");
+
+  // And the old forward pass, done by hand on the old layout, agrees.
+  const inputs = new Float32Array(INPUTS);
+  for (let k = 0; k < TOPOLOGY_V1.inputs; k += 1) inputs[k] = Math.cos(k);
+  const hidden = Array.from({ length: HIDDEN }, (_, h) => {
+    let sum = old[v1.b1 + h];
+    for (let k = 0; k < TOPOLOGY_V1.inputs; k += 1) sum += old[v1.w1 + h * TOPOLOGY_V1.inputs + k] * inputs[k];
+    return Math.tanh(sum);
+  });
+  const outputs = forward(migrated, inputs);
+  for (let o = 0; o < TOPOLOGY_V1.outputs; o += 1) {
+    let sum = old[v1.b2 + o];
+    for (let h = 0; h < HIDDEN; h += 1) sum += old[v1.w2 + o * HIDDEN + h] * hidden[h];
+    assert.ok(Math.abs(outputs[o] - sum) < 1e-5, `output ${o}`);
+  }
+  assert.throws(() => migrateBrain(new Float32Array(10)), /weights/);
 });

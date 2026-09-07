@@ -21,6 +21,8 @@
 export const MODE_WALK = 0;
 /** Chewing through the world, one cell at a time. */
 export const MODE_DIG = 1;
+/** Digging the floor out from under itself. */
+export const MODE_DIG_DOWN = 2;
 
 /** Bits of the packed agent state word. */
 export const AGENT_TIMER_MASK = 0x000000ff;

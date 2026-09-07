@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { BRAIN_FLOATS, randomBrain } from "../src/core/brain.js";
+import { BRAIN_FLOATS, TOPOLOGY_V1, layoutFor, migrateBrain, randomBrain } from "../src/core/brain.js";
 import { POPULATION_VERSION, packPopulation, resizePopulation, unpackPopulation } from "../src/core/population.js";
 
 /** @param {number} count @returns {Float32Array} */
@@ -39,6 +39,7 @@ test("a record that cannot be trusted is refused, not loaded", () => {
   const good = { version: POPULATION_VERSION, generation: 1, count: 2, brains, elites: new Uint32Array([0]), best: 0, mean: 0, savedAt: 0 };
   assert.throws(() => unpackPopulation(null), /No population/);
   assert.throws(() => unpackPopulation({ ...good, version: POPULATION_VERSION + 1 }), /version/);
+  assert.throws(() => unpackPopulation({ ...good, version: 1 }), /version-1 population/, "a version-1 record of the wrong size");
   assert.throws(() => unpackPopulation({ ...good, count: 3 }), /weights/);
   assert.throws(() => unpackPopulation({ ...good, elites: new Uint32Array([7]) }), /outside/);
   const poisoned = new Float32Array(brains);
@@ -82,4 +83,18 @@ test("resizing is a pure function of its seed", () => {
   const brains = population(1);
   assert.deepEqual(resizePopulation(brains, new Uint32Array([0]), 4, 3), resizePopulation(brains, new Uint32Array([0]), 4, 3));
   assert.throws(() => resizePopulation(new Float32Array(0), new Uint32Array(0), 2, 1), /empty/);
+});
+
+test("a version-1 population is migrated on the way in, not refused", () => {
+  // Twenty generations bred before dig-down existed are worth keeping.
+  const old = layoutFor(TOPOLOGY_V1).floats;
+  const brains = new Float32Array(3 * old);
+  for (let k = 0; k < brains.length; k += 1) brains[k] = (k % 17) / 17 - 0.5;
+  const back = unpackPopulation({ version: 1, generation: 20, count: 3, brains, elites: [2], best: 9, mean: 4, savedAt: 1 });
+  assert.equal(back.version, POPULATION_VERSION);
+  assert.equal(back.generation, 20);
+  assert.equal(back.brains.length, 3 * BRAIN_FLOATS);
+  for (let i = 0; i < 3; i += 1) {
+    assert.deepEqual(back.brains.subarray(i * BRAIN_FLOATS, (i + 1) * BRAIN_FLOATS), migrateBrain(brains.subarray(i * old, (i + 1) * old)));
+  }
 });

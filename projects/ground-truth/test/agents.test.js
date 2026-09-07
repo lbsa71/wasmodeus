@@ -5,6 +5,7 @@ import {
   AGENT_ALIVE_BIT,
   MAX_AGENT_TIMER,
   MODE_DIG,
+  MODE_DIG_DOWN,
   MODE_WALK,
   packAgent,
   tick,
@@ -13,7 +14,7 @@ import {
 } from "../src/core/agents.js";
 
 test("an agent round-trips through its packed word", () => {
-  for (const mode of [MODE_WALK, MODE_DIG]) {
+  for (const mode of [MODE_WALK, MODE_DIG, MODE_DIG_DOWN]) {
     for (const facing of [-1, 1]) {
       const agent = { alive: true, mode, facing, timer: 37 };
       assert.deepEqual(unpackAgent(packAgent(agent)), agent);

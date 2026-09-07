@@ -265,7 +265,7 @@ are **evolved**. This is neuroevolution — a genetic algorithm over the weights
 not a GAN and not gradient descent — and it is why the whole thing fits inside
 the compute pass that already existed.
 
-The net is tiny: twelve senses, eight `tanh` hidden units, three actions, 131
+The net is tiny: thirteen senses, eight `tanh` hidden units, four actions, 148
 weights. It lives *inline in the lemming's record*, after its body, so the
 forward pass, the elite clone on respawn and the once-a-generation readback all
 touch one buffer through one binding. Inference runs on the GPU in
@@ -283,7 +283,7 @@ it faces — so a brain does not have to learn the world twice over:
 | bias | always one |
 | drop ahead | nothing under the cell ahead: a pit, a cliff, a tunnel's end |
 | ahead, above ahead | the cell ahead is solid; the one above it is too |
-| hardness | how hard the cell ahead is to dig, 0 open to 1 bedrock |
+| hardness, hardness below | how hard the cell ahead, and the floor underfoot, is to dig: 0 open to 1 bedrock |
 | water | water within a few cells ahead — fatal, so worth a sense of its own |
 | facing | −1 or 1 |
 | scent | direction to the nearest gold, ahead-positive, and how near it is |
@@ -296,8 +296,12 @@ the nearest nugget to each cell, 64 KB, in a uniform. The grid only decides
 position, so its coarseness costs nothing but a little error on the boundary
 between two nuggets' territories. A lemming smells gold within 1 024 cells.
 
-**What it does.** Walk, dig, or turn — whichever output is largest, held for
-four frames, then asked again.
+**What it does.** Walk, dig ahead, turn, or **dig down** — whichever output is
+largest, held for four frames, then asked again. Digging down takes out the
+floor under the sprite and a cell either side, so the shaft is one wider than
+the lemming, and the fall rule does the rest; a decision later it may dig
+again. Twenty generations never dug downwards before this existed, for the
+simple reason that no action did: the only way down was off a ledge.
 
 **What it is scored on.** Fifty per cell of gold dug through, which is what the
 whole thing is for. But gold is rare, and a first generation of random brains
@@ -353,8 +357,12 @@ one, for browsers that cannot write to a folder and for passing a population
 around by hand.
 
 The file is a fixed header, a JSON block for everything human, then the raw
-weights: 131 floats a brain, so 600 lemmings is 314 KB and the full 4 096 is
-2 MB. Everything that comes back — from the database, a folder or a file — is
+weights: 148 floats a brain, so 600 lemmings is 355 KB and the full 4 096 is
+2.4 MB. A population bred before dig-down existed — twelve senses, three
+actions — is **migrated** on the way in rather than refused: every weight lands
+where it was, the new sense is wired with zeros and the new action scores
+zero, so the brains behave exactly as they did and can now learn what they
+could not. Everything that comes back — from the database, a folder or a file — is
 checked before it is trusted: version, shape, every weight finite, elites in
 range. What fails is dropped, not loaded.
 

@@ -15,9 +15,9 @@ import { SKY_CELL } from "../src/core/geometry.js";
 import { COUNTER_WORDS, PER_FRAME_COUNTERS } from "../src/core/counters.js";
 import { GOLD_MAX_BLUE, GOLD_MIN_GREEN, GOLD_MIN_RED } from "../src/core/palette.js";
 import {
-  ACTION_DIG, ACTION_TURN, ACTION_WALK, APPROACH_REWARD, BRAIN_B1, BRAIN_B2, BRAIN_FLOATS, BRAIN_W1, BRAIN_W2,
+  ACTION_DIG, ACTION_DIG_DOWN, ACTION_TURN, ACTION_WALK, APPROACH_REWARD, BRAIN_B1, BRAIN_B2, BRAIN_FLOATS, BRAIN_W1, BRAIN_W2,
   DEATH_PENALTY, DECISION_HOLD, GOLD_REWARD, HIDDEN, INPUTS, INPUT_ABOVE_AHEAD, INPUT_AHEAD, INPUT_BIAS,
-  INPUT_DIGGING, INPUT_DROP_AHEAD, INPUT_FACING, INPUT_GOLD_AHEAD, INPUT_HARDNESS, INPUT_SCENT_NEAR,
+  INPUT_DIGGING, INPUT_DROP_AHEAD, INPUT_FACING, INPUT_GOLD_AHEAD, INPUT_HARDNESS, INPUT_HARDNESS_BELOW, INPUT_SCENT_NEAR,
   INPUT_SCENT_X, INPUT_SCENT_Y, INPUT_WATER, OUTPUTS, SCENT_RANGE, CLOSEST_UNSET, DIG_REWARD,
 } from "../src/core/brain.js";
 import { MAX_SCENT_CELLS } from "../src/core/scent.js";
@@ -690,7 +690,7 @@ test("the shader's brain has the topology and weight layout brain.js breeds for"
     ["INPUTS", INPUTS], ["HIDDEN", HIDDEN], ["OUTPUTS", OUTPUTS],
     ["BRAIN_W1", BRAIN_W1], ["BRAIN_B1", BRAIN_B1], ["BRAIN_W2", BRAIN_W2], ["BRAIN_B2", BRAIN_B2],
     ["BRAIN_FLOATS", BRAIN_FLOATS],
-    ["ACTION_WALK", ACTION_WALK], ["ACTION_DIG", ACTION_DIG], ["ACTION_TURN", ACTION_TURN],
+    ["ACTION_WALK", ACTION_WALK], ["ACTION_DIG", ACTION_DIG], ["ACTION_TURN", ACTION_TURN], ["ACTION_DIG_DOWN", ACTION_DIG_DOWN],
     ["DECISION_HOLD", DECISION_HOLD],
   ]) {
     assert.equal(shaderConst(name, "u32"), value, `${name} differs between shader and JavaScript`);
@@ -701,8 +701,7 @@ test("the shader's brain has the topology and weight layout brain.js breeds for"
   ]) {
     assert.equal(shaderConst(name, "f32"), value, `${name} differs between shader and JavaScript`);
   }
-  assert.match(simulation, /brain: array<f32, 131>,/, "the brain lives inline in the agent record");
-  assert.equal(BRAIN_FLOATS, 131);
+  assert.match(simulation, new RegExp(`brain: array<f32, ${BRAIN_FLOATS}>,`), "the brain lives inline in the agent record");
 });
 
 test("the agent record is laid out where the engine writes it", () => {
@@ -710,9 +709,9 @@ test("the agent record is laid out where the engine writes it", () => {
   const fields = [...struct.matchAll(/^\s*(\w+):\s*([^\n]+?),\s*$/gm)].map((m) => [m[1], m[2].trim()]);
   assert.deepEqual(fields, [
     ["pos_x", "f32"], ["pos_y", "f32"], ["vel_x", "f32"], ["vel_y", "f32"],
-    ["state", "u32"], ["score", "f32"], ["closest", "f32"], ["brain", "array<f32, 131>"],
+    ["state", "u32"], ["score", "f32"], ["closest", "f32"], ["brain", `array<f32, ${BRAIN_FLOATS}>`],
   ]);
-  assert.equal(AGENT_STRIDE_BYTES, 7 * 4 + 131 * 4);
+  assert.equal(AGENT_STRIDE_BYTES, 7 * 4 + BRAIN_FLOATS * 4);
 });
 
 test("every sense the brain was bred on is filled in, at the slot it expects", () => {
@@ -720,6 +719,7 @@ test("every sense the brain was bred on is filled in, at the slot it expects", (
   const senses = {
     INPUT_BIAS, INPUT_DROP_AHEAD, INPUT_AHEAD, INPUT_ABOVE_AHEAD, INPUT_HARDNESS, INPUT_WATER,
     INPUT_FACING, INPUT_SCENT_X, INPUT_SCENT_Y, INPUT_SCENT_NEAR, INPUT_GOLD_AHEAD, INPUT_DIGGING,
+    INPUT_HARDNESS_BELOW,
   };
   assert.equal(Object.keys(senses).length, INPUTS, "one constant per input");
   for (const [name, slot] of Object.entries(senses)) {
@@ -796,4 +796,17 @@ test("lemmings cannot pass each other", () => {
   // a digger stops at it rather than walking through.
   assert.match(step, /if \(other\) \{\s*facing = -facing;\s*\} else if \(!ahead\)/, "the walk reflex");
   assert.match(step, /if \(!blocked_at\(x \+ facing, y\) && !other\)/, "and the dig advance");
+});
+
+test("a lemming can dig straight down: a shaft one wider than itself, then it drops in", () => {
+  const step = body("step_agents");
+  assert.match(step, /else if \(action == ACTION_DIG_DOWN\) \{\s*mode = MODE_DIG_DOWN;/);
+  const shaft = step.slice(step.indexOf("if (mode == MODE_DIG_DOWN) {"), step.indexOf("} else {", step.indexOf("if (mode == MODE_DIG_DOWN) {")));
+  assert.match(shaft, /for \(var dx = -\(AGENT_HALF_W \+ 1\); dx <= AGENT_HALF_W \+ 1; dx \+= 1\)/, "the floor under the sprite and a cell either side");
+  assert.match(shaft, /dig_cell\(x \+ dx, y - 1\)/, "the row underfoot");
+  assert.match(shaft, /score \+= f32\(dug\) \* DIG_REWARD/);
+  assert.match(shaft, /if \(found == DUG_GOLD\) \{ score \+= GOLD_REWARD; \}/);
+  // Falling is what happens next, by the rule that already exists.
+  assert.ok(step.indexOf("if (!blocked_at(x, y - 1)) {") < step.indexOf("if (mode == MODE_DIG_DOWN) {"), "nothing underfoot is checked first, every frame");
+  assert.match(step, /inputs\[INPUT_HARDNESS_BELOW\] = hardness_of\(word_at\(x, y - 1\)\);/, "and it can feel how hard the floor is");
 });

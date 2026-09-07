@@ -8,11 +8,16 @@
  * checks, and how to fit a saved population to however many lemmings the
  * slider now asks for.
  */
-import { BRAIN_FLOATS, mutate } from "./brain.js";
+import { BRAIN_FLOATS, TOPOLOGY_V1, layoutFor, migrateBrain, mutate } from "./brain.js";
 import { hashU32 } from "./prng.js";
 
-/** Bumped whenever the record's shape or the brain's topology changes. */
-export const POPULATION_VERSION = 1;
+/**
+ * Bumped whenever the record's shape or the brain's topology changes. Version
+ * 1 was twelve senses and three actions; a version-1 record is migrated on the
+ * way in — see `migrateBrain` — rather than refused.
+ */
+export const POPULATION_VERSION = 2;
+const MIGRATABLE_VERSION = 1;
 
 /**
  * @typedef {{
@@ -44,12 +49,21 @@ export function packPopulation({ generation, count, brains, elites, best, mean }
 export function unpackPopulation(record) {
   if (!record || typeof record !== "object") throw new Error("No population in the record.");
   const saved = /** @type {Partial<SavedPopulation>} */ (record);
-  if (saved.version !== POPULATION_VERSION) {
+  if (saved.version !== POPULATION_VERSION && saved.version !== MIGRATABLE_VERSION) {
     throw new Error(`Population version ${saved.version} is not ${POPULATION_VERSION}.`);
   }
-  const brains = saved.brains instanceof Float32Array ? saved.brains : new Float32Array(saved.brains ?? []);
+  let brains = saved.brains instanceof Float32Array ? saved.brains : new Float32Array(saved.brains ?? []);
   const elites = saved.elites instanceof Uint32Array ? saved.elites : new Uint32Array(saved.elites ?? []);
   const count = Number(saved.count);
+  if (saved.version === MIGRATABLE_VERSION) {
+    const old = layoutFor(TOPOLOGY_V1).floats;
+    if (!Number.isInteger(count) || count < 1 || brains.length !== count * old) {
+      throw new Error(`A version-1 population of ${count} needs ${count * old} weights, not ${brains.length}.`);
+    }
+    const migrated = new Float32Array(count * BRAIN_FLOATS);
+    for (let i = 0; i < count; i += 1) migrated.set(migrateBrain(brains.subarray(i * old, (i + 1) * old)), i * BRAIN_FLOATS);
+    brains = migrated;
+  }
   if (!Number.isInteger(count) || count < 1 || brains.length !== count * BRAIN_FLOATS) {
     throw new Error(`A population of ${count} needs ${count * BRAIN_FLOATS} weights, not ${brains.length}.`);
   }

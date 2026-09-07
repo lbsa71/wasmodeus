@@ -21,9 +21,16 @@ import { hashU32, random01 } from "./prng.js";
 
 // --- Topology ----------------------------------------------------------------
 
-export const INPUTS = 12;
+export const INPUTS = 13;
 export const HIDDEN = 8;
-export const OUTPUTS = 3;
+export const OUTPUTS = 4;
+
+/**
+ * The shape a population was bred with before dig-down existed: twelve senses
+ * and three actions. Records of that shape are migrated, not refused — see
+ * {@link migrateBrain} — so a run is not thrown away when the body grows.
+ */
+export const TOPOLOGY_V1 = { inputs: 12, hidden: 8, outputs: 3 };
 
 /** Weight layout: W1 (hidden x inputs, row-major), b1, W2 (outputs x hidden), b2. */
 export const BRAIN_W1 = 0;
@@ -62,12 +69,16 @@ export const INPUT_SCENT_NEAR = 9;
 export const INPUT_GOLD_AHEAD = 10;
 /** Whether it is currently digging, so a brain can learn to keep at it. */
 export const INPUT_DIGGING = 11;
+/** How hard the floor under it is to dig: 0 open, up to 1 for bedrock. */
+export const INPUT_HARDNESS_BELOW = 12;
 
 // --- Actions -----------------------------------------------------------------
 
 export const ACTION_WALK = 0;
 export const ACTION_DIG = 1;
 export const ACTION_TURN = 2;
+/** Dig the floor out from under itself and drop into the hole: a shaft. */
+export const ACTION_DIG_DOWN = 3;
 
 // --- Fitness -----------------------------------------------------------------
 
@@ -102,6 +113,50 @@ export const DECISION_HOLD = 4;
 export const CLOSEST_UNSET = -1;
 /** Initial weights are uniform in ±this. */
 export const WEIGHT_SPREAD = 1;
+
+/**
+ * Where each block of weights starts for a given shape. The current shape's
+ * offsets are the `BRAIN_*` constants; this is the general form, for migrating.
+ *
+ * @param {{ inputs: number, hidden: number, outputs: number }} shape
+ * @returns {{ w1: number, b1: number, w2: number, b2: number, floats: number }}
+ */
+export function layoutFor({ inputs, hidden, outputs }) {
+  const w1 = 0;
+  const b1 = w1 + hidden * inputs;
+  const w2 = b1 + hidden;
+  const b2 = w2 + outputs * hidden;
+  return { w1, b1, w2, b2, floats: b2 + outputs };
+}
+
+/**
+ * Re-shapes a brain bred with fewer senses or actions into the current shape.
+ * Every weight it had lands where it was; the new senses are wired with zeros,
+ * so they change nothing until mutation finds a use for them, and a new action
+ * scores zero, so it is taken only where every old action scored worse. The
+ * brain behaves exactly as it did, and can now learn what it could not.
+ *
+ * @param {ArrayLike<number>} old one brain in the old shape
+ * @param {{ inputs: number, hidden: number, outputs: number }} [shape] the old shape
+ * @returns {Float32Array} the same brain in the current shape
+ */
+export function migrateBrain(old, shape = TOPOLOGY_V1) {
+  if (shape.hidden !== HIDDEN || shape.inputs > INPUTS || shape.outputs > OUTPUTS) {
+    throw new Error(`Cannot migrate a ${shape.inputs}x${shape.hidden}x${shape.outputs} brain into ${INPUTS}x${HIDDEN}x${OUTPUTS}.`);
+  }
+  const from = layoutFor(shape);
+  if (old.length !== from.floats) throw new Error(`A ${shape.inputs}x${shape.hidden}x${shape.outputs} brain has ${from.floats} weights, not ${old.length}.`);
+  const next = new Float32Array(BRAIN_FLOATS);
+  for (let h = 0; h < HIDDEN; h += 1) {
+    for (let k = 0; k < shape.inputs; k += 1) next[BRAIN_W1 + h * INPUTS + k] = old[from.w1 + h * shape.inputs + k];
+    next[BRAIN_B1 + h] = old[from.b1 + h];
+  }
+  for (let o = 0; o < shape.outputs; o += 1) {
+    for (let h = 0; h < HIDDEN; h += 1) next[BRAIN_W2 + o * HIDDEN + h] = old[from.w2 + o * shape.hidden + h];
+    next[BRAIN_B2 + o] = old[from.b2 + o];
+  }
+  return next;
+}
 
 // --- Inference ---------------------------------------------------------------
 
