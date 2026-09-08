@@ -110,7 +110,8 @@ const ACTION_DIG: u32  = 1u;
 const ACTION_TURN: u32 = 2u;
 const ACTION_DIG_DOWN: u32 = 3u;
 const GOLD_REWARD: f32     = 50.0;
-const APPROACH_REWARD: f32 = 1.0;
+const GOLD_DOWN_REWARD: f32 = 0.0;
+const APPROACH_REWARD: f32 = 0.1;
 const DIG_REWARD: f32      = 0.05;
 const DIG_DOWN_REWARD: f32 = 0.0;
 const DEATH_PENALTY: f32   = 500.0;
@@ -215,6 +216,7 @@ struct Counters {
   sank: atomic<u32>,
   // The score: gold a lemming has dug through. Never reset by a frame.
   gold: atomic<u32>,
+  gold_shafted: atomic<u32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -977,18 +979,17 @@ fn is_gold(word: u32) -> bool {
 
 // Digging turns a cell into the placeholder rather than releasing it, so the
 // tunnel keeps its shape and holds its own roof up, and it costs the pool
-// nothing. Bedrock is beyond a lemming; water is not dug but drowned in. Gold
-// dug through is gold mined.
+// nothing. Bedrock is beyond a lemming; water is not dug but drowned in.
+//
+// Gold is counted two ways by the caller, not here: mined, when it is dug
+// along; shafted, when a hole going down happens to pass through it.
 fn dig_cell(x: i32, y: i32) -> u32 {
   if (!in_bounds(x, y)) { return DUG_NOTHING; }
   let c = cell_index(x, y);
   let value = atomicLoad(&field[c]);
   if (value == 0u || is_void(value) || is_water(value) || bond_of(value) == 0u) { return DUG_NOTHING; }
   if (!atomicCompareExchangeWeak(&field[c], value, VOID_CELL).exchanged) { return DUG_NOTHING; }
-  if (is_gold(value)) {
-    atomicAdd(&counters.gold, 1u);
-    return DUG_GOLD;
-  }
+  if (is_gold(value)) { return DUG_GOLD; }
   return DUG_ROCK;
 }
 
@@ -1286,7 +1287,10 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
       for (var dy = 0; dy <= AGENT_HEIGHT; dy += 1) {
         let found = dig_cell(x + facing * step, y + dy);
         if (found != DUG_NOTHING) { dug += 1u; }
-        if (found == DUG_GOLD) { score += GOLD_REWARD; }
+        if (found == DUG_GOLD) {
+          score += GOLD_REWARD;
+          atomicAdd(&counters.gold, 1u);
+        }
       }
     }
     atomicAdd(&counters.dug, dug);
@@ -1302,12 +1306,17 @@ fn step_agents(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
     // means it drops into what it dug, and the decision after that may dig
     // again — a shaft, a cell a decision. Bedrock stops it; `dig_cell` refuses.
     // The sump does not: a shaft dug far enough ends in water. Rock dug this
-    // way earns nothing in itself, only what the shaft reaches.
+    // way earns nothing in itself, only what the shaft reaches — and gold dug
+    // from under its own feet only a tenth, since it goes down the shaft
+    // with it. Mining is digging *along* a nugget.
     var dug = 0u;
     for (var dx = -(AGENT_HALF_W + 1); dx <= AGENT_HALF_W + 1; dx += 1) {
       let found = dig_cell(x + dx, y - 1);
       if (found != DUG_NOTHING) { dug += 1u; }
-      if (found == DUG_GOLD) { score += GOLD_REWARD; }
+      if (found == DUG_GOLD) {
+        score += GOLD_DOWN_REWARD;
+        atomicAdd(&counters.gold_shafted, 1u);
+      }
     }
     atomicAdd(&counters.dug, dug);
     score += f32(dug) * DIG_DOWN_REWARD;

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { SUMP, createCaveWorld, goldNuggets, settleBonds, sprinkleGold, sumpTop, surfaceProfile } from "../src/core/world-gen.js";
+import { NUGGET_RADIUS, SUMP, createCaveWorld, goldNuggets, settleBonds, sprinkleGold, sumpTop, surfaceProfile } from "../src/core/world-gen.js";
 import { cellIndex } from "../src/core/geometry.js";
 import { VOID_CELL, WATER_BOND, cellBond, isOccupied, isVoid, packCell, unpackCell } from "../src/core/field-format.js";
 import { neighbourSupport } from "../src/core/sand.js";
@@ -313,4 +313,21 @@ test("the bottom of the world is one flooded cave, and every column ends in it",
   assert.ok(bare > 0, "the ceiling never wanders: it is a ruled line");
   const nuggets = goldNuggets({ ...WORLD, seed: 5 }, surfaceProfile({ ...WORLD, seed: 5 }));
   for (const { y } of nuggets) assert.ok(y > sumpTop(WORLD), "gold starts above the sump");
+});
+
+test("a small world is still worth prospecting: never fewer than two dozen nuggets", () => {
+  const small = { width: 1536, height: 864 };
+  const nuggets = goldNuggets({ ...small, seed: 2 }, surfaceProfile({ ...small, seed: 2 }));
+  assert.ok(nuggets.length >= 24, `only ${nuggets.length} nuggets in a small world`);
+  const large = { width: 6144, height: 3456 };
+  const many = goldNuggets({ ...large, seed: 2 }, surfaceProfile({ ...large, seed: 2 }));
+  assert.ok(many.length > nuggets.length * 3, "a big world has more, but nowhere near sixteen times as many");
+});
+
+test("a nugget is the same size in every arena: lemmings do not shrink with the world", () => {
+  for (const world of [{ width: 1536, height: 864 }, { width: 6144, height: 3456 }]) {
+    for (const { radius } of goldNuggets({ ...world, seed: 3 }, surfaceProfile({ ...world, seed: 3 }))) {
+      assert.ok(radius >= NUGGET_RADIUS[0] && radius <= NUGGET_RADIUS[1], `radius ${radius} in a ${world.width}-wide world`);
+    }
+  }
 });

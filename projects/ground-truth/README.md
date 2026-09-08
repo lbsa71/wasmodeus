@@ -304,12 +304,28 @@ the lemming, and the fall rule does the rest; a decision later it may dig
 again. Twenty generations never dug downwards before this existed, for the
 simple reason that no action did: the only way down was off a ledge.
 
-**What it is scored on.** Fifty per cell of gold dug through, which is what the
-whole thing is for. But gold is rare, and a first generation of random brains
-would all score exactly zero with nothing to select on — so a lemming is also
-paid one point per cell for getting *nearer to gold than it has ever been*, a
-twentieth of a point per cell dug **ahead**, nothing at all per cell dug
-**down**, and docked five hundred for dying. The approach term is what turns a
+**What it is scored on.** Fifty per cell of gold dug **ahead** — mined — which
+is what the whole thing is for, and *nothing* per cell of gold dug **down**,
+since gold taken out from under your own feet goes down the shaft with you: it
+is destroyed rather than collected, and it is paid for as such. Paid in full a
+shaft through a nugget was worth as much as mining it, and brains dug through
+gold and kept going; at a tenth it was still a third of the population's gold
+income and mining decayed generation by generation. At nothing, the only way
+to score from gold is to dig along a seam — and a shaft is still how a lemming
+reaches a deep one, because what pays is what it does when it arrives. But gold is rare, and a
+first generation of random brains would all score exactly zero with nothing
+to select on — so a lemming is also paid a tenth of a point per cell for
+getting *nearer to gold than it has ever been*, a twentieth of a point per cell
+of rock dug ahead, nothing at all per cell of rock dug down, and docked five
+hundred for dying.
+
+That tenth is small on purpose, and it was not always. At a full point per
+cell the approach was worth up to a thousand over a lifetime — as much as
+mining twenty cells of gold and far easier to collect — and it quietly became
+the thing being optimised: brains learned to dive at a nugget and never mine
+it. Measured over eight generations, 1 100 cells of gold shafted through
+against 11 mined, with mining bred *out* as the generations went by. A
+bootstrap that has done its job has to get out of the way. The approach term is what turns a
 flat landscape into a slope evolution can climb. The digging term is small on
 purpose — a few hundred a generation for a constant tunneller, about what
 approaching is worth and far short of one nugget. Digging down earns nothing
@@ -335,6 +351,34 @@ record — score and brain — is read back, 2 MB, the top tenth keep their slot
 and their weights untouched, and every other slot becomes the mutated cross of
 two of them: each weight from one parent or the other, about a tenth of them
 nudged. All of it is a pure function of the seed, so a run can be replayed.
+
+**Every generation starts from the same world.** The map is restored before
+the new population is dropped in. Without that each generation inherits the
+last one's tunnels and mined-out nuggets, and the task drifts under the brains'
+feet: a score in generation forty means something different from the same
+score in generation four, and selection is comparing apples with the remains of
+oranges.
+
+**The arena starts small and is grown.** The default world is 1 536 × 864 —
+a sixteenth of the large one, with two dozen nuggets in it, so gold is dense
+and a random brain can strike it — and the *World* control grows it to
+medium or large once the brains have something to bring to a bigger place. A
+brain knows nothing of size, so the population carries over; the choice is
+remembered between visits. Two things deliberately do *not* scale with the
+world, because a lemming does not: nuggets are 6 to 17 cells in radius in
+every arena (scaled down with the world they were twenty cells of gold each,
+and the small world taught nothing), and the crew is one lemming per eight
+cells of width — 192, 384, 600 — since lemmings cannot pass each other and six
+hundred of them is more lemming than a small world has ground.
+
+Restoring the map removes one source of drift but not all of them, and it is
+worth being clear about the limit. An elite keeps its brain, its slot and its
+starting position, and the world it wakes up in is the same one — but the six
+hundred lemmings *around* it are not, and lemmings block each other, dig
+tunnels each other fall down, and bury each other. So an elite does not
+reliably re-earn its score, and the best score can fall from one generation to
+the next even though the best brain was kept. What is fixed is the task; the
+crowd is part of the weather.
 
 **Only successful nets are ever respawned.** A lemming that drowns or is
 smashed mid-generation comes back, after a delay, as a *clone of a current
@@ -402,7 +446,8 @@ them mine it.
 
 Nuggets are compact discs rather than veins, because a vein is a thin line that
 vanishes when you zoom out and the whole point is that you can see gold from
-across the world. Fifty-odd of them, one per 400 000 cells, each replacing only
+across the world. One per 200 000 cells and never fewer than two dozen — a
+hundred-odd in the large world — each replacing only
 stone — never soil, water, a cave or bedrock — so a nugget embedded in a cave
 wall shows its face to the cave and one under the ground has to be dug for.
 They are biased towards the surface: most are a short dig down, so a lemming
@@ -562,8 +607,11 @@ hundred frames while the slower bond-driven collapse carries on behind it.
 
 ## The world
 
-6144 × 3456 cells — about twenty-one million, some six times the area of a
-1080p screen at 1:1. A rolling surface with soil, sand lenses, grass and trees;
+Three sizes, all the same shape: small, 1 536 × 864, where a run starts;
+medium, 3 072 × 1 728; and large, 6144 × 3456 cells — about twenty-one million,
+some six times the area of a 1080p screen at 1:1. What follows describes the
+large one; every feature is a fraction of the world, so the others are the
+same place at a smaller scale. A rolling surface with soil, sand lenses, grass and trees;
 a tunnel-and-cavern system carved out of the rock beneath it; a flooded sump
 spanning the whole width just above the bedrock; moss, glowcaps,
 mushrooms and hanging vines lining the caves; ore veins, water seams and nuggets
@@ -644,9 +692,10 @@ Requires a browser with WebGPU.
 | `flowing/f` | water cells that moved this frame; falls to near zero as pools level |
 | `drowned/f` | lemmings lost to water this frame |
 | `sank/f` | cells that traded places with the water beneath them this frame |
-| `gold mined` | the score: cells of gold lemmings have dug through, ever |
+| `gold mined` | the score: cells of gold mined by digging along a seam |
+| `gold shafted` | gold a shaft merely fell through, counted apart; a brain that has learned to stop digging down on a strike keeps this the smaller number |
 | `generation` | which generation, and how far through it |
-| `best score` / `mean score` | how the last generation did before it was bred from |
+| `best score` / `mean score` / `last gen gold` | how the last generation did before it was bred from |
 | `view` / `zoom` | where the camera is and how far in |
 
 ## Layout

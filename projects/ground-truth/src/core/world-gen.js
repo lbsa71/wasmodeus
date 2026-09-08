@@ -15,8 +15,20 @@ import { MATERIALS } from "./palette.js";
 import { createNoiseField, sampleField } from "./noise.js";
 import { random01 } from "./prng.js";
 
-export const DEFAULT_WORLD_WIDTH = 6144;
-export const DEFAULT_WORLD_HEIGHT = 3456;
+/**
+ * World sizes. Brains learn faster in a small world — the same dozen nuggets
+ * in a sixteenth of the space — so that is where a run starts, and the arena
+ * is grown as they get smarter. Every feature is a fraction of the world, so
+ * each size is the same kind of place at a different scale.
+ */
+export const WORLD_SIZES = {
+  small: { width: 1536, height: 864 },
+  medium: { width: 3072, height: 1728 },
+  large: { width: 6144, height: 3456 },
+};
+export const DEFAULT_WORLD_SIZE = "small";
+export const DEFAULT_WORLD_WIDTH = WORLD_SIZES[DEFAULT_WORLD_SIZE].width;
+export const DEFAULT_WORLD_HEIGHT = WORLD_SIZES[DEFAULT_WORLD_SIZE].height;
 
 /** Fractions of the world height. */
 const SURFACE_LEVEL = 0.87;
@@ -186,8 +198,16 @@ export function createCaveWorld({ width, height, seed = 1 }) {
  * How many nuggets a world gets, and how big. One per this many cells, so a
  * bigger world has more to find rather than the same few spread thinner.
  */
-const CELLS_PER_NUGGET = 400_000;
-const FEWEST_NUGGETS = 4;
+const CELLS_PER_NUGGET = 200_000;
+/**
+ * Never fewer than this, however small the world: a small arena is for
+ * learning in, and it is two dozen nuggets in a sixteenth of the space that
+ * makes it easy. There is no such thing as too much gold for a lemming to
+ * learn on.
+ */
+const FEWEST_NUGGETS = 24;
+/** Nugget radii in cells, the same in every size of world. */
+export const NUGGET_RADIUS = [6, 17];
 
 /**
  * Nuggets of gold buried in the stone.
@@ -239,7 +259,9 @@ export function sprinkleGold(field, { width, height, seed }, profile, options = 
  */
 export function goldNuggets({ width, height, seed }, profile, options = {}) {
   const count = options.nuggets ?? Math.max(FEWEST_NUGGETS, Math.round((width * height) / CELLS_PER_NUGGET));
-  const [smallest, largest] = options.radius ?? [Math.max(2, Math.round(height * 0.0018)), Math.max(3, Math.round(height * 0.0048))];
+  // Nuggets are sized in cells, not as a fraction of the world: a lemming is
+  // the same size in every arena, and a nugget is worth what it holds.
+  const [smallest, largest] = options.radius ?? NUGGET_RADIUS;
   const nuggets = [];
   const floorOfRock = sumpTop({ width, height }) + Math.round(height * 0.02);
   for (let k = 0; k < count; k += 1) {

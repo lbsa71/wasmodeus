@@ -20,7 +20,7 @@ import { clampRestThreshold } from "./core/rest.js";
 import { clampRestitution } from "./core/collision.js";
 import { MODE_WALK, packAgent } from "./core/agents.js";
 import { hashU32 } from "./core/prng.js";
-import { defaultSettings } from "./core/settings.js";
+import { defaultSettings, suggestedLemmings } from "./core/settings.js";
 import { clampCamera, createCamera, panCamera, worldFromScreen, zoomCameraAt } from "./core/camera.js";
 import { acquireDevice } from "./gpu/device.js";
 import { createPipelines } from "./gpu/pipelines.js";
@@ -41,6 +41,8 @@ export class GroundTruthEngine {
     this.pipelines = pipelines;
     this.settings = settings;
     this.frame = 0;
+    /** Frames since the page loaded; `frame` restarts with every reset. */
+    this.lifetimeFrames = 0;
     this.paused = false;
     /** True once a generated world has been handed over. */
     this.ready = false;
@@ -70,7 +72,7 @@ export class GroundTruthEngine {
     /** How many of the elite list the shader may clone from. */
     this.eliteCount = 0;
     /** The state of evolution: which generation, how far through, how it scored. */
-    this.evolution = { generation: 0, best: 0, mean: 0, frame: 0, frames: settings.evolution.generationFrames };
+    this.evolution = { generation: 0, best: 0, mean: 0, gold: 0, shafted: 0, frame: 0, frames: settings.evolution.generationFrames };
     /** A generation readback in flight; frames carry on meanwhile. */
     this.evolving = false;
     /**
@@ -148,10 +150,20 @@ export class GroundTruthEngine {
   reset(capacity = this.settings.capacity) {
     this.settings.capacity = Math.max(1, Math.min(this.maxCapacity, Math.round(capacity)));
     capacity = this.settings.capacity;
+    this.resources.allocatePool(capacity, this.pipelines.computeLayout, this.pipelines.compositeLayout);
+    this.restoreWorld();
+  }
+
+  /**
+   * Puts the world back as it was generated — field, pool, counters, momentum
+   * — and drops the population in again. What a generation starts from; what
+   * {@link reset} does after allocating the pool.
+   */
+  restoreWorld() {
+    const capacity = this.settings.capacity;
     this.frame = 0;
     this.blast = { x: 0, y: 0, radius: 0, strength: 0 };
     this.drag = { x: 0, y: 0 };
-    this.resources.allocatePool(capacity, this.pipelines.computeLayout, this.pipelines.compositeLayout);
     if (this.sourceField) this.resources.uploadField(this.sourceField);
     this.resources.resetCounters(capacity);
     this.#writeParams();
@@ -216,7 +228,7 @@ export class GroundTruthEngine {
     for (let i = 0; i < n; i += 1) randomBrain(hashU32(i * 7919 + this.settings.seed), brains, i * BRAIN_FLOATS);
     const everyone = Uint32Array.from({ length: Math.min(n, ELITE_CAPACITY) }, (_, i) => i);
     this.population = n > 0 ? { brains, elites: everyone } : null;
-    this.evolution = { generation: 0, best: 0, mean: 0, frame: 0, frames: this.settings.evolution.generationFrames };
+    this.evolution = { generation: 0, best: 0, mean: 0, gold: 0, shafted: 0, frame: 0, frames: this.settings.evolution.generationFrames };
     this.#spawn(brains, everyone);
   }
 
@@ -229,10 +241,30 @@ export class GroundTruthEngine {
   adoptPopulation(saved) {
     this.population = { brains: saved.brains, elites: saved.elites };
     this.evolution = {
-      generation: saved.generation, best: saved.best, mean: saved.mean,
+      generation: saved.generation, best: saved.best, mean: saved.mean, gold: 0, shafted: 0,
       frame: 0, frames: this.settings.evolution.generationFrames,
     };
     this.populate(this.settings.agents.count);
+  }
+
+  /**
+   * Changes the size of the world. Every buffer that is sized by the world is
+   * rebuilt; the population is untouched, since a brain knows nothing of size.
+   * Nothing runs until a world of the new size is handed to {@link loadWorld}.
+   *
+   * @param {{ width: number, height: number }} world
+   */
+  async resizeWorld(world) {
+    this.ready = false;
+    this.sourceField = null;
+    // Nothing may still be using the old buffers when they go.
+    await this.device.queue.onSubmittedWorkDone();
+    this.resources.destroy();
+    this.settings.world = { width: world.width, height: world.height };
+    this.settings.agents.count = suggestedLemmings(this.settings.world);
+    this.resources = new SimulationResources(this.device, this.settings.world);
+    this.scent = bakeScent([], this.settings.world);
+    this.camera = createCamera(this.settings.world, this.viewport, { y: this.settings.world.height * 0.8, scale: 1 });
   }
 
   /** Starts evolution over from random brains. */
@@ -301,9 +333,18 @@ export class GroundTruthEngine {
       let best = -Infinity;
       let total = 0;
       for (const score of scores) { best = Math.max(best, score); total += score; }
-      this.evolution = { generation, best, mean: total / n, frame: 0, frames: this.settings.evolution.generationFrames };
+      // Snapshot what the generation dug before the world — and the counters
+      // with it — are put back.
+      this.evolution = {
+        generation, best, mean: total / n, gold: this.stats.gold, shafted: this.stats.goldShafted,
+        frame: 0, frames: this.settings.evolution.generationFrames,
+      };
       this.population = { brains: next.brains, elites: next.elites };
-      this.#spawn(next.brains, next.elites);
+      // Every generation starts from the same world. Without this each one
+      // inherits the last one's tunnels and mined-out nuggets, and the task
+      // drifts under the brains' feet: a score in generation forty means
+      // something different from the same score in generation four.
+      this.restoreWorld();
       this.onGeneration?.({ generation, count: n, brains: next.brains, elites: next.elites, best, mean: total / n });
     } finally {
       this.evolving = false;
@@ -434,6 +475,7 @@ export class GroundTruthEngine {
     this.drag = { x: 0, y: 0 };
 
     if (!this.paused) {
+      this.lifetimeFrames += 1;
       this.evolution.frame += 1;
       if (this.evolution.frame >= this.evolution.frames && !this.evolving) {
         this.#evolve().catch((error) => this.#report(`Evolution failed: ${error instanceof Error ? error.message : error}`));

@@ -10,7 +10,10 @@ import { formatScale } from "../core/camera.js";
  * @param {{
  *   fps: number, frame: number, restThreshold: number, substeps: number,
  *   camera: import("../core/camera.js").Camera,
- *   evolution?: { generation: number, best: number, mean: number, frame: number, frames: number }
+ *   evolution?: {
+ *     generation: number, best: number, mean: number, gold: number, shafted: number,
+ *     frame: number, frames: number
+ *   }
  * }} context
  * @returns {{ label: string, value: string, warn?: boolean }[]}
  */
@@ -40,10 +43,15 @@ export function debugRows(stats, context) {
     { label: "drowned/f", value: formatCount(stats.drowned) },
     { label: "sank/f", value: formatCount(stats.sank) },
     { label: "gold mined", value: formatCount(stats.gold) },
+    // Gold a shaft merely fell through. A brain that has learned to stop
+    // digging down on a strike keeps this well below what it mines.
+    { label: "gold shafted", value: formatCount(stats.goldShafted), warn: stats.goldShafted > stats.gold },
     ...(context.evolution ? [
       { label: "generation", value: `${context.evolution.generation} · ${context.evolution.frame}/${context.evolution.frames}` },
       { label: "best score", value: formatCount(context.evolution.best) },
       { label: "mean score", value: formatCount(context.evolution.mean) },
+      { label: "last gen mined", value: formatCount(context.evolution.gold) },
+      { label: "last gen shafted", value: formatCount(context.evolution.shafted) },
     ] : []),
     { label: "rest frames", value: `${context.restThreshold}` },
     { label: "substeps", value: `${context.substeps}` },

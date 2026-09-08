@@ -1,7 +1,9 @@
 import globals from "globals";
 
 export default [
-  { ignores: ["public/app.js", "public/app.js.map", "node_modules/**"] },
+  // Everything in `public/` that is JavaScript is esbuild output: bundled
+  // source, already linted where it was written.
+  { ignores: ["public/*.js", "public/*.js.map", "node_modules/**"] },
   {
     files: ["**/*.js"],
     languageOptions: {

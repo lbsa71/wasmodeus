@@ -16,7 +16,7 @@ import { COUNTER_WORDS, PER_FRAME_COUNTERS } from "../src/core/counters.js";
 import { GOLD_MAX_BLUE, GOLD_MIN_GREEN, GOLD_MIN_RED } from "../src/core/palette.js";
 import {
   ACTION_DIG, ACTION_DIG_DOWN, ACTION_TURN, ACTION_WALK, APPROACH_REWARD, BRAIN_B1, BRAIN_B2, BRAIN_FLOATS, BRAIN_W1, BRAIN_W2,
-  DEATH_PENALTY, DECISION_HOLD, GOLD_REWARD, HIDDEN, INPUTS, INPUT_ABOVE_AHEAD, INPUT_AHEAD, INPUT_BIAS,
+  DEATH_PENALTY, DECISION_HOLD, GOLD_DOWN_REWARD, GOLD_REWARD, HIDDEN, INPUTS, INPUT_ABOVE_AHEAD, INPUT_AHEAD, INPUT_BIAS,
   INPUT_DIGGING, INPUT_DROP_AHEAD, INPUT_FACING, INPUT_GOLD_AHEAD, INPUT_HARDNESS, INPUT_HARDNESS_BELOW, INPUT_SCENT_NEAR,
   INPUT_SCENT_X, INPUT_SCENT_Y, INPUT_WATER, OUTPUTS, SCENT_RANGE, CLOSEST_UNSET, DIG_REWARD, DIG_DOWN_REWARD,
   INPUT_GOLD_NEAR, INPUT_GOLD_BELOW,
@@ -360,7 +360,7 @@ test("prepare resets every per-frame counter", () => {
     const snake = name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
     assert.ok(prepare.includes(`atomicStore(&counters.${snake}, 0u)`), `${name} is not reset`);
   }
-  assert.doesNotMatch(prepare, /counters\.gold/, "gold is a score, not a rate");
+  assert.doesNotMatch(prepare, /counters\.gold/, "gold, mined or shafted, is a score and not a rate");
 });
 
 test("granular material sinks regardless of its neighbours; stone is held by them", () => {
@@ -656,7 +656,7 @@ test("a lemming digs by turning cells into the placeholder, not by releasing the
   assert.doesNotMatch(dig, /pop_budget|free_ring|particles\[/, "and costs the pool nothing");
   assert.match(dig, /is_water\(value\)/, "water is not dug");
   assert.match(dig, /bond_of\(value\) == 0u/, "bedrock is beyond a lemming");
-  assert.match(dig, /is_gold\(value\)[\s\S]*?counters\.gold/, "gold dug through is gold mined");
+  assert.doesNotMatch(dig, /counters\.gold/, "which way the gold was dug is the caller's business");
 
   const step = body("step_agents");
   const digging = step.slice(step.indexOf("if (mode == MODE_DIG) {"), step.indexOf("} else {", step.indexOf("if (mode == MODE_DIG) {")));
@@ -700,7 +700,7 @@ test("the shader's brain has the topology and weight layout brain.js breeds for"
     assert.equal(shaderConst(name, "u32"), value, `${name} differs between shader and JavaScript`);
   }
   for (const [name, value] of [
-    ["GOLD_REWARD", GOLD_REWARD], ["APPROACH_REWARD", APPROACH_REWARD], ["DIG_REWARD", DIG_REWARD],
+    ["GOLD_REWARD", GOLD_REWARD], ["GOLD_DOWN_REWARD", GOLD_DOWN_REWARD], ["APPROACH_REWARD", APPROACH_REWARD], ["DIG_REWARD", DIG_REWARD],
     ["DIG_DOWN_REWARD", DIG_DOWN_REWARD],
     ["DEATH_PENALTY", DEATH_PENALTY], ["SCENT_RANGE", SCENT_RANGE],
   ]) {
@@ -763,7 +763,8 @@ test("what a lemming is scored on", () => {
   assert.equal(shaderConst("CLOSEST_UNSET", "f32"), CLOSEST_UNSET);
   assert.match(step, /if \(closest < 0\.0\) \{\s*closest = min\(dist, SCENT_RANGE\);\s*\} else if/,
     "the first standing frame only measures");
-  assert.match(step, /if \(found == DUG_GOLD\) \{ score \+= GOLD_REWARD; \}/, "digging through gold");
+  assert.match(step, /score \+= GOLD_REWARD;/, "mining gold");
+  assert.match(step, /score \+= GOLD_DOWN_REWARD;/, "and a fraction of that for shafting through it");
   assert.match(step, /score \+= f32\(dug\) \* DIG_REWARD/, "and a little for digging at all");
   assert.match(body("die"), /score - DEATH_PENALTY/, "and dying costs");
   const drown = step.indexOf("counters.drowned");
@@ -811,7 +812,9 @@ test("a lemming can dig straight down: a shaft one wider than itself, then it dr
   assert.match(shaft, /dig_cell\(x \+ dx, y - 1\)/, "the row underfoot");
   assert.match(shaft, /score \+= f32\(dug\) \* DIG_DOWN_REWARD/, "rock dug downwards earns its own rate, which is nothing");
   assert.doesNotMatch(shaft, /\* DIG_REWARD/);
-  assert.match(shaft, /if \(found == DUG_GOLD\) \{ score \+= GOLD_REWARD; \}/);
+  assert.match(shaft, /score \+= GOLD_DOWN_REWARD;/, "gold from under its feet is worth a fraction");
+  assert.doesNotMatch(shaft, /score \+= GOLD_REWARD/, "a shaft through a nugget must not pay like mining it");
+  assert.match(shaft, /atomicAdd\(&counters\.gold_shafted, 1u\)/, "and is counted apart from what it mines");
   // Falling is what happens next, by the rule that already exists.
   assert.ok(step.indexOf("if (!blocked_at(x, y - 1)) {") < step.indexOf("if (mode == MODE_DIG_DOWN) {"), "nothing underfoot is checked first, every frame");
   assert.match(step, /inputs\[INPUT_HARDNESS_BELOW\] = hardness_of\(word_at\(x, y - 1\)\);/, "and it can feel how hard the floor is");
@@ -827,4 +830,13 @@ test("a lemming can feel gold around it and under it, which is how it knows to d
   const step = body("step_agents");
   assert.match(step, /inputs\[INPUT_GOLD_NEAR\] = gold_near\(x, y\);/);
   assert.match(step, /inputs\[INPUT_GOLD_BELOW\] = select\(0\.0, 1\.0, gold_below\(x, y\)\);/);
+});
+
+test("gold is counted two ways: mined by digging along, shafted by falling through", () => {
+  // The difference between the two is the whole question of whether a brain
+  // has learned to stop digging down when it strikes something.
+  const step = body("step_agents");
+  const tunnel = step.slice(step.indexOf("if (mode == MODE_DIG) {"), step.indexOf("} else if (mode == MODE_DIG_DOWN) {"));
+  assert.match(tunnel, /score \+= GOLD_REWARD;\s*atomicAdd\(&counters\.gold, 1u\);/, "digging along mines it");
+  assert.doesNotMatch(tunnel, /gold_shafted/);
 });

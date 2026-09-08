@@ -176,21 +176,15 @@ export class SimulationResources {
     this.device.queue.writeBuffer(this.elites, 0, block);
   }
 
+  /** Releases every buffer, so a world of another size can be built. */
   destroy() {
-    this.scent.destroy();
-    this.elites.destroy();
-    this.generation.destroy();
-    this.particles?.destroy();
-    this.states?.destroy();
-    this.freeRing?.destroy();
-    this.field.destroy();
-    this.overlay.destroy();
-    this.impulse.destroy();
-    this.agents.destroy();
-    this.counters.destroy();
-    this.params.destroy();
+    for (const buffer of [
+      this.params, this.field, this.overlay, this.impulse, this.agents, this.counters,
+      this.scent, this.elites, this.generation, this.particles, this.states, this.freeRing,
+    ]) buffer?.destroy();
     this.readback.destroy();
   }
+
 }
 
 /**

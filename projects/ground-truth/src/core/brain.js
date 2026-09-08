@@ -94,14 +94,33 @@ export const ACTION_DIG_DOWN = 3;
 
 // --- Fitness -----------------------------------------------------------------
 
-/** Score per cell of gold dug through. What the whole thing is for. */
+/** Score per cell of gold dug *ahead*: gold mined. What the whole thing is for. */
 export const GOLD_REWARD = 50;
 /**
- * Score per cell of closest approach to gold. Gold is rare, so without this
- * every brain in an early generation scores zero and there is nothing to select
- * on; a brain that got nearer than it had ever been is rewarded for it.
+ * Score per cell of gold dug *down*: nothing. Gold taken out from under your
+ * own feet goes down the shaft with you — it is destroyed, not collected, and
+ * it is paid for as such.
+ *
+ * Paid in full it was worth exactly as much as mining, and brains dug through
+ * nuggets and kept going. At a tenth it was still a third of the population's
+ * whole gold income, and mining decayed generation by generation as shafting
+ * crept back. At nothing, the only way a brain can score from gold is to dig
+ * *along* a seam — and a shaft is still how it reaches a deep one, because
+ * what pays is what it does when it arrives.
  */
-export const APPROACH_REWARD = 1;
+export const GOLD_DOWN_REWARD = 0;
+/**
+ * Score per cell of closest approach to gold. A bootstrap, and a small one on
+ * purpose: without it every brain in an early generation scores zero and there
+ * is nothing to select on, but its total over a lifetime is bounded by
+ * {@link SCENT_RANGE}, and at one point a cell that bound was a hundred — as
+ * much as mining twenty cells of gold, and far easier to collect. Brains
+ * learned to dive at a nugget and never mine it: 1 100 cells of gold shafted
+ * through against 11 mined, with mining bred *out* over eight generations.
+ * At a tenth of a point the whole approach is worth two cells of mined gold,
+ * so it points the way without being worth arriving.
+ */
+export const APPROACH_REWARD = 0.1;
 /**
  * Score per cell dug *ahead*, gold or not. Small on purpose: a constant digger
  * earns a few hundred over a generation, about what approaching gold is worth

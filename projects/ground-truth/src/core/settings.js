@@ -3,7 +3,22 @@
  */
 import { DEFAULT_CAPACITY } from "./capacity.js";
 import { DEFAULT_REST_THRESHOLD } from "./rest.js";
-import { DEFAULT_WORLD_HEIGHT, DEFAULT_WORLD_WIDTH } from "./world-gen.js";
+import { DEFAULT_WORLD_HEIGHT, DEFAULT_WORLD_SIZE, DEFAULT_WORLD_WIDTH, WORLD_SIZES } from "./world-gen.js";
+
+export { DEFAULT_WORLD_SIZE, WORLD_SIZES };
+
+/**
+ * How many lemmings a world has room for: one per eight cells of width, so
+ * the crowd on the surface is the same in every arena. Six hundred three-cell
+ * lemmings on a 1 536-cell surface is more lemming than ground, and they
+ * cannot pass each other.
+ *
+ * @param {{ width: number }} world
+ * @returns {number}
+ */
+export function suggestedLemmings({ width }) {
+  return Math.min(600, Math.max(100, Math.round(width / 8)));
+}
 import { RUBBLE_BOND } from "./palette.js";
 
 /**
@@ -72,7 +87,7 @@ export function defaultSettings() {
     blastStrength: 700,
     smudgeStrength: 240,
     // Lemmings: how many walk the world, and how fast.
-    agents: { count: 600, speed: 26 },
+    agents: { count: suggestedLemmings(WORLD_SIZES[DEFAULT_WORLD_SIZE]), speed: 26 },
     // How brains breed. A generation is twenty seconds; the top tenth keep
     // their weights and everyone else is a mutated cross of two of them. See
     // `src/core/brain.js`.

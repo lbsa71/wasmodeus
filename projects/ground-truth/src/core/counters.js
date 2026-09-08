@@ -24,12 +24,16 @@ export const COUNTER_WORDS = [
   "drowned",
   "sank",
   "gold",
+  "goldShafted",
 ];
-/** Padded past the 32 bytes of counters so the block stays 16-byte aligned. */
-export const COUNTERS_BYTES = 64;
+/** Padded past the counters themselves so the block stays 16-byte aligned. */
+export const COUNTERS_BYTES = 80;
 /**
  * Counters reset by the `prepare` pass every frame; the rest are persistent.
- * `gold` is the score: how much a lemming has ever dug through.
+ * `gold` is the score: cells of gold mined by digging *along* a seam.
+ * `goldShafted` is gold a shaft merely fell through, counted apart because the
+ * difference between the two is the whole question of whether a brain has
+ * learned to stop digging down when it strikes something.
  */
 export const PER_FRAME_COUNTERS = [
   "emitted", "deposited", "dislodged", "undermined", "denied", "crowded", "stuck",
@@ -48,7 +52,7 @@ export function counterIndex(name) {
  *   head: number, tail: number, popBudget: number, emitted: number,
  *   deposited: number, dislodged: number, undermined: number, denied: number,
  *   crowded: number, stuck: number, walking: number, dug: number,
- *   flowing: number, drowned: number, sank: number, gold: number,
+ *   flowing: number, drowned: number, sank: number, gold: number, goldShafted: number,
  *   moving: number, free: number, capacity: number, utilisation: number
  * }} CounterSnapshot
  */

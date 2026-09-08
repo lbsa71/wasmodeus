@@ -10,6 +10,7 @@ import {
 import { MAX_REST_THRESHOLD, MIN_REST_THRESHOLD } from "./core/rest.js";
 import { AGENT_CAPACITY } from "./core/layout.js";
 import { FrameRateMeter, debugRows } from "./ui/debug-panel.js";
+import { DEFAULT_WORLD_SIZE, WORLD_SIZES } from "./core/settings.js";
 import { packPopulation, unpackPopulation } from "./core/population.js";
 import {
   LATEST_POPULATION_FILE, decodePopulationFile, encodePopulationFile, populationFileName,
@@ -34,6 +35,7 @@ const bounceInput = /** @type {HTMLInputElement} */ (document.querySelector("#bo
 const bounceValue = /** @type {HTMLOutputElement} */ (document.querySelector("#bounce-value"));
 const blastInput = /** @type {HTMLInputElement} */ (document.querySelector("#blast"));
 const blastValue = /** @type {HTMLOutputElement} */ (document.querySelector("#blast-value"));
+const worldSizeSelect = /** @type {HTMLSelectElement} */ (document.querySelector("#world-size"));
 const lemmingsInput = /** @type {HTMLInputElement} */ (document.querySelector("#lemmings"));
 const lemmingsValue = /** @type {HTMLOutputElement} */ (document.querySelector("#lemmings-value"));
 const pauseButton = /** @type {HTMLButtonElement} */ (document.querySelector("#pause"));
@@ -282,7 +284,9 @@ try {
     generationValue.textContent = `gen ${engine.evolution.generation}`
       + ` · frame ${engine.evolution.frame}/${engine.evolution.frames}`
       + ` · best ${Math.round(engine.evolution.best).toLocaleString()}`
-      + ` · ${engine.frame.toLocaleString()} frames`;
+      + ` · last gen ${engine.evolution.gold.toLocaleString()} mined,`
+      + ` ${engine.evolution.shafted.toLocaleString()} shafted`
+      + ` · ${engine.lifetimeFrames.toLocaleString()} frames`;
     const rows = debugRows(engine.stats, {
       fps,
       frame: engine.frame,
@@ -307,6 +311,40 @@ try {
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
+
+  // The arena's size is remembered between visits. Small is where a run
+  // starts; grow it as the brains get smarter.
+  const WORLD_SIZE_KEY = "ground-truth.world-size";
+  /** @returns {keyof typeof WORLD_SIZES} */
+  const rememberedSize = () => {
+    try {
+      const saved = localStorage.getItem(WORLD_SIZE_KEY);
+      if (saved && saved in WORLD_SIZES) return /** @type {keyof typeof WORLD_SIZES} */ (saved);
+    } catch {
+      // Storage may be unavailable; the default is fine.
+    }
+    return DEFAULT_WORLD_SIZE;
+  };
+  const chosenSize = rememberedSize();
+  worldSizeSelect.value = chosenSize;
+  if (chosenSize !== DEFAULT_WORLD_SIZE) await engine.resizeWorld(WORLD_SIZES[chosenSize]);
+  worldSizeSelect.addEventListener("change", async () => {
+    const size = /** @type {keyof typeof WORLD_SIZES} */ (worldSizeSelect.value);
+    if (!(size in WORLD_SIZES)) return;
+    worldSizeSelect.disabled = true;
+    try { localStorage.setItem(WORLD_SIZE_KEY, size); } catch { /* not remembered, still resized */ }
+    statusLine.textContent = `Carving a ${WORLD_SIZES[size].width} x ${WORLD_SIZES[size].height} world…`;
+    await engine.resizeWorld(WORLD_SIZES[size]);
+    try {
+      const grown = await carveWorld(worker, engine.settings.world, engine.settings.seed);
+      engine.loadWorld(grown.field, grown.nuggets);
+      lemmingsInput.value = `${engine.settings.agents.count}`;
+      lemmingsValue.textContent = `${engine.settings.agents.count}`;
+    } catch (error) {
+      statusLine.textContent = error instanceof Error ? error.message : `${error}`;
+    }
+    worldSizeSelect.disabled = false;
+  });
 
   statusLine.textContent = "Carving caves…";
   const carved = await carveWorld(worker, engine.settings.world, engine.settings.seed);

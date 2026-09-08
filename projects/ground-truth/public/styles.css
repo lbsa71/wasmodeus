@@ -105,6 +105,17 @@ html, body {
 #controls label { display: block; color: var(--dim); }
 #controls output { float: right; color: var(--accent); font-variant-numeric: tabular-nums; }
 #controls input[type="range"] { display: block; width: 100%; margin-top: .3rem; accent-color: var(--accent); }
+#controls select {
+  display: block;
+  width: 100%;
+  margin-top: .3rem;
+  padding: .3rem .4rem;
+  border: 1px solid var(--edge);
+  border-radius: .25rem;
+  background: #0d1626;
+  color: var(--ink);
+  font: inherit;
+}
 
 #controls .row { display: flex; gap: .5rem; align-items: center; }
 
