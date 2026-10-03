@@ -1,0 +1,22 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer } from "../src/server.js";
+import { startGame } from "../src/core/game.js";
+test("local API persists complete games and rejects stale, malformed and foreign saves",async t=>{
+  const dir=await mkdtemp(join(tmpdir(),"echoes2-http-"));
+  const server=createServer({databasePath:join(dir,"games.json")});
+  await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
+  t.after(async()=>{await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});});
+  const base=`http://127.0.0.1:${server.address().port}`;
+  const db=await (await fetch(base+"/api/database")).json();
+  assert.equal(db.ruleset,"echoes2-charge-v1");
+  const save=await fetch(base+"/api/database",{method:"PUT",body:JSON.stringify({expectedRevision:0,database:startGame(db)})});
+  assert.equal(save.status,200);assert.equal((await save.json()).revision,1);
+  assert.equal((await fetch(base+"/api/database",{method:"PUT",body:JSON.stringify({expectedRevision:0,database:db})})).status,409);
+  assert.equal((await fetch(base+"/api/database",{method:"PUT",body:"{"})).status,400);
+  assert.equal((await fetch(base+"/api/database",{method:"PUT",headers:{origin:"https://example.invalid"},body:JSON.stringify({expectedRevision:1,database:db})})).status,403);
+  assert.equal((await (await fetch(base+"/api/database")).json()).games.length,1);
+});

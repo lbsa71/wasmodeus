@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#E7EEE8" />
+  <title>Echoes 3 · Branching memories</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="game-shell">
+    <header class="masthead"><div><h1>Echoes <span>3</span></h1><p>Branching memories</p></div><p id="round-count">Growing a tree…</p></header>
+    <div class="scoreline" aria-label="Match scores"><span class="your-score">You <strong id="human-wins">0</strong></span><span class="ghost-score">Ghost <strong id="ghost-wins">0</strong></span><span class="discovery-score"><strong id="discoveries">0</strong> breakthroughs</span></div>
+    <section class="play-space" aria-label="Current match">
+      <div id="turn-status" class="turn-status" aria-live="polite"><h2 id="turn-label">Cut a tip. Take the last branch.</h2><p id="instruction">Loading your saved trees…</p><p id="source" class="source-note" hidden></p></div>
+      <div class="tree-caption"><span id="tree-count">A growing possibility space</span><span class="actor-key"><i class="human-mark"></i>You <i class="ghost-mark"></i>Ghost</span></div>
+      <div id="tree" class="tree-viewport" role="group" aria-label="Branching tree; select a gold tip to cut it"></div>
+      <p class="cut-preview" aria-hidden="true"><span class="default-preview">Deeper cuts copy their remaining parent branch.</span><span class="copy-preview">This cut copies its remaining parent branch.</span><span class="remove-preview">This branch will disappear.</span></p>
+      <div id="result" class="result" hidden><strong id="result-title"></strong><span>A new tree is coming…</span></div>
+      <div class="play-actions"><button id="return-live" class="primary" hidden>Return to your match</button><button id="replay-ghost" hidden>Replay ghost move</button></div>
+    </section>
+    <p id="error" class="error" role="alert" hidden></p>
+    <details class="rules"><summary>How the branches work</summary><div class="detail-content"><p>Take turns cutting one gold tip. A tip attached directly to the root disappears. Deeper cuts make a copy of the remaining parent branch, beside the original.</p><p>Take the last branch to win. All branches belong to both players.</p><p>The ghost replays earlier human decisions only when the <strong>entire tree</strong> matches. When no reply exists, it passes and you cut again. Each new unanswered tree earns one breakthrough.</p></div></details>
+    <div class="seed-controls"><label for="seed-picker">Starting tree</label><select id="seed-picker"><option value="(((())())())">Sprout</option><option value="(((())()()))">Thicket</option><option value="(((()())()))">Deep tree</option></select><button id="new-game">New tree</button><button id="grow-seed">Grow seed</button></div>
+    <details id="history-panel" class="memory"><summary><span>Memory archive</span><span id="archive-summary">No decisions yet</span></summary><div class="detail-content"><div class="history-pickers"><label>Match<select id="game-picker" aria-label="Review match"></select></label><label>Position<select id="turn-picker" aria-label="Review position"></select></label></div><p id="history-detail"></p><details class="tree-identity"><summary>Whole-tree identity</summary><p>Every branch is included. Sibling order and drawing direction make no difference.</p><code id="position-code"></code></details><div class="archive-actions"><button id="export">Export full archive</button><button id="reload">Reload saved game</button></div></div></details>
+    <footer><span id="save-status">Opening local archive…</span><span>Every cut leaves a memory.</span></footer>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

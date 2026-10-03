@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#131e35"><title>Echoes — Wasmodeus</title>
+  <link rel="stylesheet" href="styles.css"><link rel="icon" href="favicon.svg" type="image/svg+xml">
+</head>
+<body>
+  <header class="masthead"><a class="identity" href="/">Echoes<span>A game against the past</span></a><div class="header-actions"><div class="match-score" aria-label="Match score"><span>You <strong id="human-score">0</strong></span><span>Ghost <strong id="ghost-score">0</strong></span></div><div id="score-display" class="score-display" aria-label="Discovery points"><strong id="score">0</strong><span>discoveries</span></div><button id="export" class="quiet" disabled>Download database</button><button id="new-game" disabled>New match</button></div></header>
+  <main>
+    <section class="play-area" aria-label="Constellation game">
+      <div class="encounter-heading"><div><p id="encounter-number">Loading your history</p><h1 id="headline">Eight stones. One frontier.</h1></div><p id="turn-count"></p></div>
+      <div id="error" role="alert" hidden></div>
+      <div id="goal-progress" class="goal-progress"><span class="human-goal">Your best line <strong id="human-line">1 / 4</strong></span><span class="ghost-goal">Ghost’s best line <strong id="ghost-line">1 / 4</strong></span></div>
+      <div id="ghost-status" class="ghost-status" role="status"><div><strong id="ghost-label">Your turn</strong><p id="ghost-cue">Checking the archive’s rotations and reflections.</p></div><button id="replay-ghost" class="quiet" hidden>Replay ghost move</button></div>
+      <div id="board-frame" class="board-frame"><div id="discovery-flash" class="discovery-flash" aria-hidden="true" hidden><strong id="flash-value">+1</strong><span id="flash-caption">New frontier</span></div><div id="board" class="board" aria-label="Eight shared stones on a square grid"></div><div class="board-key"><span><i class="key-blue"></i>Your blue</span><span><i class="key-amber"></i>Ghost’s amber</span><span><i class="key-resting"></i>Resting ring</span><span><i class="key-target"></i>Legal destination</span></div></div>
+      <div class="under-board"><p id="instruction" aria-live="polite">Loading the saved database…</p><button id="return-live" class="quiet" hidden>Return to current encounter</button></div>
+      <div id="outcome" hidden><p id="outcome-copy"></p></div>
+      <details class="rules" open><summary>Make four. Outwit the past.</summary><p>Make a straight line of all four blue stones, horizontally, vertically, or diagonally. Four amber stones in a line wins for the ghost—even if you complete it.</p><p>You and the ghost can move either colour. Move one cell, including diagonals; keep all eight stones connected along their edges. The ringed stone rests for one turn. Colours stay with their stones.</p><p>The ghost chooses among earlier human moves, rotated or reflected to fit. It tries to win, block your next win, or build a threat. If it has no recorded reply, you get an extra move. A new frontier also earns a discovery point.</p><p>Discoveries keep the match going. Four in a row wins it. Matches restart automatically; after 24 of your moves without a line, the match is a draw.</p></details>
+    </section>
+    <aside class="history-area" aria-label="Game history">
+      <section class="archive-summary"><h2>The living archive</h2><p id="archive-summary">Your first move will start it.</p><p id="density"></p></section>
+      <section class="chronicle"><div class="section-heading"><h2>This encounter</h2><select id="game-picker" aria-label="Review an encounter"></select></div><ol id="moves"></ol><p id="empty-history">The opening is waiting for your first decision.</p></section>
+      <section id="provenance" hidden><h2 id="provenance-heading">An earlier hand</h2><p id="provenance-copy"></p><div id="original-board" class="miniature"></div></section>
+      <section class="save-panel"><p id="save-status" role="status">Connecting to local storage…</p><p>Complete games, moves and ghost sources are saved after every step.</p><button id="reload" class="quiet">Reload saved progress</button></section>
+    </aside>
+  </main>
+  <footer>Wasmodeus <span>Move one stone. Leave a decision for someone else.</span></footer>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

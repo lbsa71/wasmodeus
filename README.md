@@ -1,5 +1,21 @@
 # WASMODEUS Workspaces
 
+`projects/echoes3` explores trees that grow when cut, with exact whole-tree
+historical matching. Run `npm run dev:echoes3` and open [http://localhost:4179](http://localhost:4179).
+It saves its full independent archive after every action. See
+[Echoes 3](projects/echoes3/README.md); verify it with `npm run check:echoes3`.
+
+`projects/echoes2` explores charge-and-capture territory against locally matched
+human memories. Run `npm run dev:echoes2` and open [http://localhost:4178](http://localhost:4178).
+It has its own complete saved archive. See [Echoes 2](projects/echoes2/README.md)
+for rules; verify it with `npm run check:echoes2`.
+
+`projects/echoes` is a playable game against transformed recorded human moves.
+Run `npm run dev:echoes` and open [http://localhost:4177](http://localhost:4177).
+Its complete games database is saved locally after every move and restored on
+reload. See [Echoes](projects/echoes/README.md) for rules and persistence details;
+verify it with `npm run check:echoes`.
+
 WASMODEUS is now organized as a multi-project workspace.
 `projects/traffic-simulator` contains the existing traffic project, and
 `projects/space-colonization` contains the galaxy simulation. The

@@ -1,0 +1,71 @@
+:root { color-scheme: light; --paper: #e7eee8; --ink: #163f36; --muted: #4c675f; --gold: #e9c46a; --human: #237f83; --ghost: #945276; --rule: #bdcec3; font-family: Avenir, "Trebuchet MS", sans-serif; color: var(--ink); background: var(--paper); font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, select { font: inherit; color: inherit; }
+button, select, summary { -webkit-tap-highlight-color: transparent; }
+button { border: 1px solid #afc3b6; border-radius: 7px; background: #f7faf5; min-height: 36px; padding: 7px 12px; cursor: pointer; }
+button:hover:not(:disabled) { background: #d5e4d8; }
+button:disabled { cursor: default; opacity: .5; }
+button:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid var(--human); outline-offset: 3px; }
+[hidden] { display: none !important; }
+.game-shell { max-width: 760px; margin: 0 auto; padding: 23px 32px 16px; }
+.masthead { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.masthead h1 { font-size: 28px; letter-spacing: -1.4px; font-weight: 650; margin: 0; line-height: 1.05; }
+.masthead h1 span { color: var(--human); font-weight: 400; }
+.masthead p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.masthead #round-count { font-size: 13px; }
+.scoreline { display: flex; align-items: baseline; gap: 24px; font-size: 13px; margin-top: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--rule); }
+.scoreline strong { font-size: 19px; margin-left: 5px; font-weight: 600; }
+.your-score { color: var(--human); }.ghost-score { color: #81415f; }
+.discovery-score { margin-left: auto; color: var(--muted); }.discovery-score strong { color: var(--ink); font-size: 15px; margin-right: 3px; }
+.play-space { position: relative; }
+.turn-status { min-height: 74px; padding-top: 16px; }
+.turn-status h2 { font-size: 21px; line-height: 1.2; font-weight: 550; letter-spacing: -.35px; margin: 0; }
+.turn-status p { font-size: 13px; line-height: 1.45; margin: 5px 0 0; max-width: 70ch; }
+.turn-status.ghost-turn h2 { color: #81415f; }
+.turn-status .source-note { font-size: 12px; color: var(--muted); }
+.tree-caption { display: flex; align-items: center; justify-content: space-between; margin: 9px 0 -2px; color: var(--muted); font-size: 11px; }
+.actor-key { display: flex; align-items: center; gap: 5px; }
+.actor-key i { height: 6px; width: 6px; border-radius: 50%; display: inline-block; margin-left: 8px; }.human-mark { background: var(--human); }.ghost-mark { background: var(--ghost); }
+.tree-viewport { overflow: auto; max-height: 58vh; min-height: 240px; scrollbar-color: #a6bbaa transparent; overscroll-behavior: contain; }
+.tree-scene { position: relative; margin: 0 auto; --action: var(--human); }
+.tree-scene[data-actor="2"] { --action: var(--ghost); }
+.tree-branches { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.tree-branches path { fill: none; stroke: #638474; stroke-width: 2.2; stroke-linecap: round; }
+.tree-branches path.branch-grown { stroke: var(--action); stroke-width: 3.6; animation: branch-grow 440ms ease-out both; }
+.tree-branches path.branch-cut { stroke: var(--action); stroke-width: 3.6; stroke-dasharray: 5 4; }
+.tree-tip, .tree-root, .tree-joint { position: absolute; transform: translate(-50%, -50%); }
+.tree-tip { width: 46px; height: 46px; min-height: 46px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; }
+.tree-tip:disabled { opacity: 1; }
+.tree-tip:hover:not(:disabled), .tree-tip:focus-visible { background: #c9ddcf; }
+.tip-shape { display: block; width: 25px; height: 29px; border: 1.5px solid #886e32; border-radius: 65% 60% 53% 55%; background: var(--gold); transform: rotate(-18deg); box-shadow: inset 3px 2px 0 #f5dc9a; }
+.tree-tip:hover:not(:disabled) .tip-shape { transform: rotate(-18deg) scale(1.1); }
+.tree-root { width: 13px; height: 13px; border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 5px #d2dfd4; }
+.tree-root::after { content: "root"; position: absolute; top: 17px; left: 50%; transform: translateX(-50%); font-size: 10px; color: var(--muted); }
+.tree-joint { height: 7px; width: 7px; border-radius: 50%; background: #638474; }
+.tip-cut .tip-shape { background: var(--action); border-color: var(--action); box-shadow: 0 0 0 6px color-mix(in srgb, var(--action), transparent 80%); transform: rotate(-35deg) scale(.85); }
+.tip-cut::after { content: ""; height: 2px; width: 35px; background: var(--paper); position: absolute; transform: rotate(-30deg); }
+.tip-grown { animation: branch-grow 440ms ease-out both; }
+.tip-grown .tip-shape { border-color: var(--action); box-shadow: 0 0 0 4px color-mix(in srgb, var(--action), transparent 75%); }
+.cut-preview { text-align: center; margin: 1px 0 10px; min-height: 19px; font-size: 12px; color: var(--muted); }
+.copy-preview, .remove-preview { display: none; }
+#tree[data-preview="copy"] + .cut-preview .default-preview, #tree[data-preview="remove"] + .cut-preview .default-preview { display: none; }
+#tree[data-preview="copy"] + .cut-preview .copy-preview, #tree[data-preview="remove"] + .cut-preview .remove-preview { display: inline; }
+.result { display: flex; align-items: baseline; justify-content: center; gap: 12px; padding: 8px 0; }.result strong { font-size: 22px; }.result span { font-size: 12px; color: var(--muted); }
+.play-actions { display: flex; justify-content: center; gap: 8px; }.play-actions:has(button:not([hidden])) { margin: 9px 0 12px; }
+.primary { background: var(--ink); color: #f6faf7; border-color: var(--ink); }
+summary { cursor: pointer; font-size: 13px; padding: 9px 0; }
+details p { margin: 4px 0 10px; font-size: 13px; line-height: 1.6; max-width: 70ch; }
+.detail-content { padding: 4px 0 12px; }.rules { border-top: 1px solid var(--rule); }
+.seed-controls { display: flex; gap: 8px; align-items: center; padding: 4px 0 14px; font-size: 12px; }.seed-controls label { margin-right: auto; color: var(--muted); }
+select { border: 1px solid #afc3b6; border-radius: 5px; background: #f6faf5; padding: 8px 24px 8px 9px; max-width: 100%; min-height: 36px; }
+.memory { border-top: 1px solid var(--rule); }.memory > summary { font-size: 13px; }.memory > summary span:last-child { float: right; color: var(--muted); font-size: 11px; margin-top: 2px; }
+.history-pickers { display: grid; grid-template-columns: 1fr 1.6fr; gap: 14px; }.history-pickers label { font-size: 12px; display: grid; gap: 5px; }.history-pickers select { width: 100%; font-size: 12px; }
+#history-detail { color: var(--muted); font-size: 12px; margin-top: 10px; }
+.tree-identity summary { padding: 4px 0; font-size: 12px; }.tree-identity p { font-size: 12px; }.tree-identity code { display: block; font-size: 12px; background: #d7e3da; padding: 10px; border-radius: 4px; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
+.archive-actions { display: flex; gap: 8px; margin-top: 12px; font-size: 12px; }
+footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 10px; margin-top: 10px; }
+.error { padding: 12px; color: #823c45; background: #f1dfe3; border-left: 3px solid #945276; font-size: 13px; line-height: 1.5; }
+@keyframes branch-grow { from { opacity: .15; } to { opacity: 1; } }
+@media (max-width: 540px) { .game-shell { padding: 18px 18px 14px; }.masthead h1 { font-size: 26px; }.scoreline { margin-top: 16px; gap: 17px; }.scoreline strong { font-size: 17px; }.discovery-score { font-size: 11px; }.turn-status h2 { font-size: 20px; }.seed-controls { flex-wrap: wrap; gap: 7px; }.seed-controls label { width: 100%; }.seed-controls select { flex: 1; }.seed-controls button { padding-inline: 10px; }.history-pickers { grid-template-columns: 1fr; gap: 9px; }footer span:last-child { display: none; }.tree-viewport { max-height: 54vh; }.memory > summary span:last-child { max-width: 55%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

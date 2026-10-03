@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#e5edf2">
+  <title>Echoes 2 · Chain reactions</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <main class="game-shell">
+    <header class="masthead">
+      <a class="wordmark" href="/" aria-label="Echoes 2 home">echoes<span>2</span></a>
+      <p class="edition">Chain reactions<br><span>An opponent made of memories</span></p>
+      <button id="new-game" class="quiet-button" type="button" disabled>New match</button>
+    </header>
+
+    <section class="arena" aria-labelledby="headline">
+      <div class="round-heading"><h1 id="headline">Charge. Burst. Take over.</h1><span id="round-count">Loading…</span></div>
+      <div class="territory" aria-label="Controlled cells">
+        <div class="side-score blue-score"><span class="side-dot"></span><span>You</span><strong id="human-territory">1</strong><span class="score-unit">cell</span></div>
+        <span class="turn-counter" id="turn-count">0 / 16 moves</span>
+        <div class="side-score coral-score"><span class="score-unit">cell</span><strong id="ghost-territory">1</strong><span>Ghost</span><span class="side-dot"></span></div>
+      </div>
+      <div id="board-frame" class="board-frame">
+        <div class="column-labels" aria-hidden="true"><span>A</span><span>B</span><span>C</span><span>D</span><span>E</span></div>
+        <div id="board" class="board" role="group" aria-label="Five by five charge board"></div>
+        <div id="result" class="result" hidden><strong id="result-title"></strong><span>Next match coming</span></div>
+      </div>
+      <div class="board-key"><span><i class="key-ready"></i>Ring = bursts on next charge</span><span><i class="key-legal"></i>Dots = playable</span></div>
+      <div id="turn-status" class="turn-status" aria-live="polite" aria-atomic="true">
+        <div class="status-top"><strong id="turn-label">Preparing your board</strong><button id="replay-ghost" type="button" class="text-button" hidden>Replay ghost</button></div>
+        <p id="instruction">Loading your saved matches…</p>
+        <p id="source" class="source" hidden></p>
+      </div>
+      <button id="return-live" class="return-button" type="button" hidden>Return to your match</button>
+      <p id="error" class="error" role="alert" hidden></p>
+    </section>
+
+    <footer class="match-footer">
+      <div class="totals"><span><strong id="human-wins">0</strong> your wins</span><span><strong id="ghost-wins">0</strong> ghost wins</span><span><strong id="discoveries">0</strong> breakthroughs</span></div>
+      <p id="save-status">Connecting to local archive</p>
+    </footer>
+
+    <details class="notebook" id="rules-panel">
+      <summary>How to play <span>Capture coral. Learn from the past.</span></summary>
+      <div class="rules-copy">
+        <p><strong>Charge a blue cell, or claim an empty cell beside blue.</strong> Each click adds one charge. At four, the cell bursts: it sends a charge up, right, down and left, capturing those cells for blue. That can set off another burst. Charge that spills over the board’s edge disappears.</p>
+        <p><strong>Capture every coral cell to win.</strong> After 16 of your moves, the side controlling more cells wins. Equal territory is a draw.</p>
+        <p>The ghost plays coral using moves you made in earlier matches. It recognises local patterns, including rotations and reflections. If it cannot remember a reply, it passes and you play again. A newly discovered unanswered position earns <strong>+1 breakthrough</strong>.</p>
+        <p>Your first match teaches the ghost. Later matches can begin at a position the ghost could not answer, with colours reversed: your next decision teaches it what was missing. Every turn saves the entire archive.</p>
+      </div>
+    </details>
+    <details class="notebook" id="history-panel">
+      <summary>Memory archive <span id="archive-summary">No recorded decisions yet</span></summary>
+      <div class="history-content">
+        <label for="game-picker">Review a match</label><select id="game-picker" disabled></select>
+        <label for="turn-picker">Position</label><select id="turn-picker" disabled></select>
+        <p id="history-detail"></p>
+        <div class="archive-actions"><button id="export" type="button" class="quiet-button" disabled>Export database</button><button id="reload" type="button" class="text-button">Reload saved game</button></div>
+      </div>
+    </details>
+  </main>
+</body>
+</html>

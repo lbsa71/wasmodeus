@@ -1,0 +1,18 @@
+{
+  "name": "@wasmodeus/echoes2",
+  "private": true,
+  "type": "module",
+  "description": "Charge-and-capture strategy against remembered human decisions.",
+  "scripts": {
+    "build:wasm": "asc assembly/index.ts --config asconfig.json --target release",
+    "build:web": "esbuild src/main.js --bundle --format=esm --sourcemap --outfile=public/app.js",
+    "build": "npm run build:wasm && npm run build:web",
+    "dev": "npm run build && node src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js",
+    "test:wasm": "npm run build:wasm && node --test test-wasm/*.test.js",
+    "lint": "eslint .",
+    "typecheck": "tsc --project jsconfig.json",
+    "check": "npm run lint && npm run typecheck && npm test && npm run test:wasm && npm run build:web"
+  }
+}

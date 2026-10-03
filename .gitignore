@@ -10,3 +10,6 @@ projects/*/public/*.wasm
 projects/*/public/*.wasm.map
 /public/
 /build/
+projects/echoes/data/
+projects/echoes2/data/
+projects/echoes3/data/

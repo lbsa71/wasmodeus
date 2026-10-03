@@ -1,0 +1,4 @@
+{
+  "options": { "runtime": "incremental", "initialMemory": 2 },
+  "targets": { "release": { "outFile": "public/echoes3.wasm", "optimizeLevel": 3, "shrinkLevel": 1 } }
+}
