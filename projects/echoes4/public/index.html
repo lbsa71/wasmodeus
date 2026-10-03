@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Echoes 4 · Aquarium</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <canvas id="aquarium" aria-label="Aquarium. Swim with the left stick, or use the pointer, touch, or arrow keys." tabindex="0"></canvas>
+    <header class="hud">
+      <div class="title"><h1>Echoes <span>4</span></h1><p>A changing food chain</p></div>
+      <div class="readings" aria-label="Dive progress">
+        <div><span>Mass</span><strong id="mass-value">4</strong></div>
+        <div><span>Time left</span><strong id="time-value">60s</strong></div>
+        <div><span>Dive</span><strong id="dive-value">1</strong></div>
+        <div><span>Meals</span><strong id="eaten-value">0</strong></div>
+      </div>
+      <div class="controller-info"><span id="controller-status">Connect Xbox controller and press A</span><button id="pause" type="button" disabled>Pause · Menu</button></div>
+    </header>
+    <section id="start-panel" class="message-panel">
+      <h2>Swim through your past.</h2>
+      <p>Eat smaller fish. Avoid larger swimmers. Your previous dives become the aquarium.</p>
+      <p id="start-detail">Your first dive records a swimming pattern. A smaller echo arrives after five seconds.</p>
+      <button id="start-button" type="button" disabled>Loading aquarium…</button>
+      <button id="start-tuning" class="secondary" type="button">Tune the next dive · View</button>
+      <small>Left stick to swim · A to start · Menu to pause<br>View to tune · Y to see upcoming meals<br>Pointer, touch and keyboard also work.</small>
+    </section>
+    <section id="result-panel" class="message-panel" hidden aria-live="polite">
+      <h2 id="result-title">Dive recorded</h2><p id="result-detail"></p><p class="next-dive">The next dive starts shortly.</p>
+    </section>
+    <aside class="tools">
+      <details id="help-panel">
+        <summary>How the food chain works</summary>
+        <p>Use the left stick to swim; ease the stick back to slow down. A starts or resumes. Menu pauses. View opens tuning; D-pad selects and adjusts sliders, B returns. X records the current dive while paused. Y shows upcoming meals.</p>
+        <p>You grow with every meal. Bigger fish swim faster and turn more slowly. There is no hunger in this experiment.</p>
+        <p>A ghost keeps swimming until it reaches a meal that can no longer happen. Then it stops and becomes passive food.</p>
+        <p>Save a fish from its recorded predator and it swims to the end of its recording. New collisions between any fish create new meals.</p>
+        <div class="legend"><span class="gold">You</span><span class="coral">Danger</span><span class="teal">Smaller</span><span class="violet">Self-echo</span><span class="pearl">Passive</span></div>
+        <label class="toggle"><input id="show-links" type="checkbox"> Show upcoming meals</label>
+      </details>
+      <details id="tuning-panel">
+        <summary>Tune the next dive</summary>
+        <p>Changes apply when the next dive begins.</p>
+        <label>Swimming speed <input id="speed" type="range" min="80" max="360" step="10" value="180"><output id="speed-output">180</output></label>
+        <label>Turning agility <input id="turning" type="range" min="1" max="7" step="0.25" value="3"><output id="turning-output">3</output></label>
+        <label>Food retained <input id="growth" type="range" min="0.25" max="1" step="0.05" value="1"><output id="growth-output">100%</output></label>
+        <label>Echo delay <input id="echo-delay" type="range" min="1" max="10" step="1" value="5"><output id="echo-delay-output">5s</output></label>
+        <label>Dive length <input id="duration" type="range" min="15" max="120" step="15" value="60"><output id="duration-output">60s</output></label>
+        <button id="bank" type="button">Record this dive and continue</button>
+      </details>
+      <details id="archive-panel">
+        <summary>Saved aquarium <span id="archive-value">0 dives</span></summary>
+        <p>Every dive keeps the whole food chain, swimming inputs, and encounters. Your next dive uses the revised ecosystem.</p>
+        <button id="export" type="button">Export full database</button><button id="reload" type="button">Reload saved aquarium</button>
+      </details>
+    </aside>
+    <div id="error" class="error" hidden role="alert"></div>
+    <footer><p id="event-detail" aria-live="polite">Your wake becomes someone else’s future.</p><span id="save-status">Loading saved aquarium…</span></footer>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

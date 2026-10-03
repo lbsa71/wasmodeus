@@ -8,6 +8,10 @@
   ],
   "description": "A multi-project simulation workspace.",
   "scripts": {
+    "dev:echoes4": "npm run dev --workspace @wasmodeus/echoes4",
+    "build:echoes4": "npm run build --workspace @wasmodeus/echoes4",
+    "test:echoes4": "npm test --workspace @wasmodeus/echoes4 && npm run test:wasm --workspace @wasmodeus/echoes4",
+    "check:echoes4": "npm run check --workspace @wasmodeus/echoes4",
     "dev:echoes3": "npm run dev --workspace @wasmodeus/echoes3",
     "build:echoes3": "npm run build --workspace @wasmodeus/echoes3",
     "test:echoes3": "npm test --workspace @wasmodeus/echoes3 && npm run test:wasm --workspace @wasmodeus/echoes3",

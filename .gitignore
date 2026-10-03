@@ -13,3 +13,4 @@ projects/*/public/*.wasm.map
 projects/echoes/data/
 projects/echoes2/data/
 projects/echoes3/data/
+projects/echoes4/data/

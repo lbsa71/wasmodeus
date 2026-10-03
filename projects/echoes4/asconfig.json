@@ -1,0 +1,4 @@
+{
+  "options": { "runtime": "stub", "initialMemory": 1 },
+  "targets": { "release": { "outFile": "public/echoes4.wasm", "optimizeLevel": 3, "shrinkLevel": 1 } }
+}

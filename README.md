@@ -1,5 +1,10 @@
 # WASMODEUS Workspaces
 
+`projects/echoes4` is a controller-first aquarium where recorded feeding chains
+meet new collisions. Run `npm run dev:echoes4` and open [http://localhost:4180](http://localhost:4180).
+Connect an Xbox controller by USB-C and press A. Each dive updates and saves the
+whole ecosystem. See [Echoes 4](projects/echoes4/README.md); verify with `npm run check:echoes4`.
+
 `projects/echoes3` explores trees that grow when cut, with exact whole-tree
 historical matching. Run `npm run dev:echoes3` and open [http://localhost:4179](http://localhost:4179).
 It saves its full independent archive after every action. See
